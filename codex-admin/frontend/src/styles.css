@@ -142,6 +142,7 @@ th { color: #8a8f98; font-weight: 700; background: rgba(255,255,255,0.025); }
 .modal-form { display: grid; gap: 12px; }
 .field-label { display: grid; gap: 7px; color: #d0d6e0; font-size: 13px; }
 .field-label span { font-weight: 650; }
+.auth-json-edit { min-height: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 .modal-note { color: #8a8f98; line-height: 1.7; margin: 6px 0 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .danger-text { color: #fca5a5 !important; }

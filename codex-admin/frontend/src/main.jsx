@@ -75,7 +75,10 @@ function AccountEditDialog({ account, onChange, onClose, onSave, pending }) {
           <Field label="原因 / 备注">
             <textarea value={account.status_reason || ''} onChange={(event) => onChange({ ...account, status_reason: event.target.value })} placeholder="状态原因、维护备注或 fallback 说明" />
           </Field>
-          <p className="modal-note">安全限制：这里仅编辑账号元数据；access_token / refresh_token / auth_raw 不会展示。如需更新凭证，请重新导入 auth.json。</p>
+          <Field label="重新输入 auth.json（可选）">
+            <textarea className="auth-json-edit" value={account.auth_json_text || ''} onChange={(event) => onChange({ ...account, auth_json_text: event.target.value })} placeholder='留空则不更新凭证。粘贴新 auth.json 后会校验 access_token / refresh_token / account_id 或 device_id。' />
+          </Field>
+          <p className="modal-note">安全限制：这里不会回显之前的 auth.json、access_token 或 refresh_token。需要更新凭证时，请在上方重新粘贴完整 auth.json。</p>
           <footer className="modal-actions">
             <button type="button" className="secondary" onClick={onClose} disabled={pending}>取消</button>
             <button type="submit" disabled={pending}>{pending ? '保存中...' : '保存修改'}</button>
@@ -176,15 +179,28 @@ function App() {
     if (!editingAccount) return;
     setPendingAction(true);
     try {
+      let parsedAuthJson;
+      if (editingAccount.auth_json_text?.trim()) {
+        try {
+          parsedAuthJson = JSON.parse(editingAccount.auth_json_text);
+        } catch (error) {
+          setMessage(`auth.json 格式错误：${error.message}`);
+          return;
+        }
+      }
+      const payload = {
+        account_id: editingAccount.account_id,
+        device_id: editingAccount.device_id,
+        expires_at: editingAccount.expires_at || null,
+        status: editingAccount.status,
+        status_reason: editingAccount.status_reason || null,
+      };
+      if (parsedAuthJson) {
+        payload.auth_json = parsedAuthJson;
+      }
       await api(`/api/accounts/${editingAccount.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          account_id: editingAccount.account_id,
-          device_id: editingAccount.device_id,
-          expires_at: editingAccount.expires_at || null,
-          status: editingAccount.status,
-          status_reason: editingAccount.status_reason || null,
-        }),
+        body: JSON.stringify(payload),
       });
       setMessage(`账号 ${editingAccount.id} 已更新`);
       setEditingAccount(null);

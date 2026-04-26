@@ -39,8 +39,8 @@ def test_import_codex_cli_tokens_shape_without_top_level_device_id(tmp_path):
     client = make_client(tmp_path)
     auth_json = {
         "tokens": {
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
+            "access_token": "***",
+            "refresh_token": "***",
             "account_id": "acct-cli-1",
         },
         "last_refresh": "2026-01-01T00:00:00Z",
@@ -52,7 +52,16 @@ def test_import_codex_cli_tokens_shape_without_top_level_device_id(tmp_path):
     body = response.json()
     assert body["account_id"] == "acct-cli-1"
     assert body["device_id"] == "acct-cli-1"
-    assert body["status_reason"] == "device_id not found in auth.json; using account_id as stable fallback"
+    assert body["status_reason"] == "auth.json has no device_id; account_id is being used as the stable device key"
+
+
+def test_import_rejects_auth_json_without_tokens(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.post("/api/accounts/import", json={"auth_json": {"account_id": "acct-no-token"}})
+
+    assert response.status_code == 400
+    assert "missing access_token" in response.json()["detail"]
 
 
 def test_list_accounts_returns_status_summary(tmp_path):
@@ -114,6 +123,42 @@ def test_account_can_be_edited_without_exposing_secrets(tmp_path):
     assert "access_token" not in body
     assert "refresh_token" not in body
     assert "auth_raw" not in body
+
+
+def test_account_edit_can_update_auth_json_without_returning_secrets(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+    new_auth = {
+        "tokens": {
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "account_id": "acct-from-edit-auth",
+            "device_id": "dev-from-edit-auth",
+        },
+        "expires_at": "2099-03-01T00:00:00+00:00",
+    }
+
+    response = client.patch(f"/api/accounts/{created['id']}", json={"auth_json": new_auth})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "acct-from-edit-auth"
+    assert body["device_id"] == "dev-from-edit-auth"
+    assert body["expires_at"] == "2099-03-01T00:00:00+00:00"
+    assert body["status_reason"] is None
+    assert "access_token" not in body
+    assert "refresh_token" not in body
+    assert "auth_raw" not in body
+
+
+def test_account_edit_rejects_invalid_auth_json(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+
+    response = client.patch(f"/api/accounts/{created['id']}", json={"auth_json": {"account_id": "acct-only"}})
+
+    assert response.status_code == 400
+    assert "missing access_token" in response.json()["detail"]
 
 
 def test_account_delete_hides_from_default_list_and_can_be_restored(tmp_path):

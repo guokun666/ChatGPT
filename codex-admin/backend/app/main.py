@@ -122,6 +122,12 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             return get_account(account_id)
+        auth_updates: dict[str, Any] = {}
+        if payload.auth_json is not None:
+            try:
+                auth_updates = extract_auth_fields(payload.auth_json)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         with db.connect() as conn:
             existing = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
             if not existing:
@@ -132,19 +138,25 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
                     UPDATE accounts SET
                         account_id = COALESCE(?, account_id),
                         device_id = COALESCE(?, device_id),
+                        auth_raw = COALESCE(?, auth_raw),
+                        access_token = COALESCE(?, access_token),
+                        refresh_token = COALESCE(?, refresh_token),
                         expires_at = COALESCE(?, expires_at),
                         status = COALESCE(?, status),
-                        status_reason = COALESCE(?, status_reason),
+                        status_reason = ?,
                         updated_at = ?
                     WHERE id = ?
                     RETURNING *
                     """,
                     (
-                        updates.get("account_id"),
-                        updates.get("device_id"),
-                        updates.get("expires_at"),
+                        auth_updates.get("account_id") or updates.get("account_id"),
+                        auth_updates.get("device_id") or updates.get("device_id"),
+                        auth_updates.get("auth_raw"),
+                        auth_updates.get("access_token"),
+                        auth_updates.get("refresh_token"),
+                        auth_updates.get("expires_at") or updates.get("expires_at"),
                         updates.get("status"),
-                        updates.get("status_reason"),
+                        auth_updates.get("status_reason") if payload.auth_json is not None else updates.get("status_reason", existing["status_reason"]),
                         utc_now(),
                         account_id,
                     ),

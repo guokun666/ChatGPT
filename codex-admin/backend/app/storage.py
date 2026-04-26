@@ -141,9 +141,13 @@ def extract_auth_fields(auth_json: dict[str, Any]) -> dict[str, Any]:
         account_id = device_id
     if not device_id and account_id:
         device_id = account_id
-        status_reason = "device_id not found in auth.json; using account_id as stable fallback"
+        status_reason = "auth.json has no device_id; account_id is being used as the stable device key"
     if not device_id:
         raise ValueError("auth_json missing device_id and account_id")
+    if not access_token:
+        raise ValueError("auth_json missing access_token")
+    if not refresh_token:
+        raise ValueError("auth_json missing refresh_token")
     return {
         "account_id": account_id or device_id,
         "device_id": device_id,

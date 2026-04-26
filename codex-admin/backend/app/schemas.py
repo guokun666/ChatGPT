@@ -26,6 +26,7 @@ class AccountUpdate(BaseModel):
     expires_at: str | None = None
     status: AccountStatus | None = None
     status_reason: str | None = None
+    auth_json: dict[str, Any] | None = None
 
 
 class ResearchNoteCreate(BaseModel):
