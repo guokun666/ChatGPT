@@ -57,6 +57,10 @@ python3 "$APP_DIR/codex-admin/deploy/migrate_legacy_accounts.py"
 # Restart staging after migration so health/account counts reflect latest DB.
 sudo -n docker compose -f docker-compose.staging.yml restart
 sleep 3
+APP_UID_GID=$(sudo -n docker exec codex-admin-new sh -c "id -u appuser && id -g appuser" | paste -sd: -)
+sudo -n chown -R "$APP_UID_GID" "$APP_DIR/codex-admin/data"
+sudo -n docker compose -f docker-compose.staging.yml restart
+sleep 3
 curl -fsS "http://127.0.0.1:${STAGING_PORT}/api/health"
 
 cat <<'NEXT'

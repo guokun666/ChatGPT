@@ -14,11 +14,16 @@ fi
 
 sudo -n docker compose up -d --build
 sleep 5
+# Ensure the mounted SQLite directory is writable by the container's appuser.
+APP_UID_GID=$(sudo -n docker exec codex-admin sh -c "id -u appuser && id -g appuser" | paste -sd: -)
+sudo -n chown -R "$APP_UID_GID" "$APP_DIR/codex-admin/data"
+sudo -n docker compose restart
+sleep 3
 sudo -n docker compose ps
 curl -fsS http://127.0.0.1:8091/api/health
 
 KEY_FILE="$APP_DIR/codex-admin/data/model-family-codex-api-key.txt"
-if [ ! -s "$KEY_FILE" ]; then
+if ! sudo -n test -s "$KEY_FILE"; then
   echo "missing API key file: $KEY_FILE" >&2
   exit 1
 fi
