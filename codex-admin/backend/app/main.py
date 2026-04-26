@@ -61,7 +61,7 @@ def resolve_cli_model(requested_model: str) -> str:
     return "gpt-5.4"
 
 
-def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_model: str) -> dict[str, Any]:
+def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_model: str, reasoning_effort: str) -> dict[str, Any]:
     auth_raw = account.get("auth_raw")
     if not auth_raw:
         raise RuntimeError("account auth_raw is empty; cannot run real Codex validation")
@@ -77,7 +77,7 @@ def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_
         (codex_home_path / "config.toml").write_text(
             "disable_response_storage = true\n"
             f"model = {json.dumps(cli_model)}\n"
-            "model_reasoning_effort = \"low\"\n"
+            f"model_reasoning_effort = {json.dumps(reasoning_effort)}\n"
             "service_tier = \"fast\"\n"
             "sandbox_mode = \"read-only\"\n"
             "web_search = \"disabled\"\n",
@@ -94,7 +94,7 @@ def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_
             "-m",
             cli_model,
             "-c",
-            "model_reasoning_effort=\"low\"",
+            f"model_reasoning_effort={json.dumps(reasoning_effort)}",
             "-c",
             "web_search=\"disabled\"",
             "-c",
@@ -120,6 +120,7 @@ def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_
             "validation_mode": "codex-cli",
             "requested_model": requested_model,
             "cli_model": cli_model,
+            "reasoning_effort": reasoning_effort,
             "prompt": prompt,
             "assistant_message": assistant_message,
         }
@@ -322,7 +323,7 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
             if row["status"] != "normal":
                 raise HTTPException(status_code=400, detail=f"account is not normal: {row['status']}")
         try:
-            result = validation_runner(account=dict(row), prompt=payload.prompt, requested_model=payload.model)
+            result = validation_runner(account=dict(row), prompt=payload.prompt, requested_model=payload.model, reasoning_effort=payload.reasoning_effort)
         except (RuntimeError, subprocess.TimeoutExpired) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {
@@ -460,7 +461,7 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
                 raise HTTPException(status_code=400, detail="no normal auth account available for real validation")
             conn.execute("UPDATE api_keys SET last_used_at = ?, updated_at = ? WHERE id = ?", (now, now, api_key_id))
         try:
-            result = validation_runner(account=dict(account), prompt=payload.prompt, requested_model=payload.model)
+            result = validation_runner(account=dict(account), prompt=payload.prompt, requested_model=payload.model, reasoning_effort=payload.reasoning_effort)
         except (RuntimeError, subprocess.TimeoutExpired) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {

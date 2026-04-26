@@ -5,6 +5,8 @@ import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 const ACCOUNT_STATUSES = ['normal', 'limited', 'banned', 'expired', 'disabled'];
+const VALIDATION_MODELS = ['codex-code', 'code-mini', 'gpt-5.4', 'gpt-5.4-codex', 'gpt-4o-codex'];
+const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'];
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -145,6 +147,7 @@ function App() {
   const [pendingAction, setPendingAction] = useState(false);
   const [validationResults, setValidationResults] = useState({});
   const [validationPrompts, setValidationPrompts] = useState({});
+  const [validationOptions, setValidationOptions] = useState({});
 
   async function loadAll(includeDeleted = showDeleted) {
     const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
@@ -310,10 +313,11 @@ function App() {
   async function runValidation(targetType, id) {
     const key = `${targetType}:${id}`;
     const prompt = validationPrompts[key]?.trim() || '你好。';
+    const options = validationOptions[key] || { model: 'codex-code', reasoning_effort: 'low' };
     setValidationResults((current) => ({ ...current, [key]: { loading: true } }));
     try {
       const path = targetType === 'account' ? `/api/accounts/${id}/test` : `/api/api-keys/${id}/test`;
-      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
+      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt, model: options.model || 'codex-code', reasoning_effort: options.reasoning_effort || 'low' }) });
       setValidationResults((current) => ({ ...current, [key]: result }));
       setMessage(`${targetType === 'account' ? 'Auth 账号' : 'API Key'} ${id} 验证通过`);
       await loadAll();
@@ -332,6 +336,18 @@ function App() {
 
   function validationPromptValue(targetType, id) {
     return validationPrompts[`${targetType}:${id}`] ?? '你好。';
+  }
+
+  function updateValidationOption(targetType, id, field, value) {
+    const key = `${targetType}:${id}`;
+    setValidationOptions((current) => ({
+      ...current,
+      [key]: { model: 'codex-code', reasoning_effort: 'low', ...(current[key] || {}), [field]: value },
+    }));
+  }
+
+  function validationOptionValue(targetType, id, field) {
+    return validationOptions[`${targetType}:${id}`]?.[field] || (field === 'model' ? 'codex-code' : 'low');
   }
 
   return (
@@ -411,6 +427,12 @@ function App() {
                           placeholder="测试输入，默认：你好。"
                           aria-label={`账号 ${account.id} 验证输入`}
                         />
+                        <select className="validation-select" value={validationOptionValue('account', account.id, 'model')} onChange={(event) => updateValidationOption('account', account.id, 'model', event.target.value)} aria-label={`账号 ${account.id} 验证模型`}>
+                          {VALIDATION_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
+                        </select>
+                        <select className="validation-select" value={validationOptionValue('account', account.id, 'reasoning_effort')} onChange={(event) => updateValidationOption('account', account.id, 'reasoning_effort', event.target.value)} aria-label={`账号 ${account.id} 思考复杂度`}>
+                          {REASONING_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                        </select>
                         <button type="button" className="mini" onClick={() => runValidation('account', account.id)} disabled={validationResults[`account:${account.id}`]?.loading}><MessageCircle size={13} />验证</button>
                         <button type="button" className="mini" onClick={() => setEditingAccount({ ...account })}><Edit3 size={13} />编辑</button>
                         <select className="mini-select" value={account.status} onChange={(event) => updateStatus(account.id, event.target.value)} aria-label={`设置账号 ${account.id} 状态`}>
@@ -457,6 +479,12 @@ function App() {
                       placeholder="测试输入，默认：你好。"
                       aria-label={`API Key ${item.id} 验证输入`}
                     />
+                    <select className="validation-select" value={validationOptionValue('api_key', item.id, 'model')} onChange={(event) => updateValidationOption('api_key', item.id, 'model', event.target.value)} aria-label={`API Key ${item.id} 验证模型`}>
+                      {VALIDATION_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                    <select className="validation-select" value={validationOptionValue('api_key', item.id, 'reasoning_effort')} onChange={(event) => updateValidationOption('api_key', item.id, 'reasoning_effort', event.target.value)} aria-label={`API Key ${item.id} 思考复杂度`}>
+                      {REASONING_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                    </select>
                     <button type="button" className="mini" onClick={() => runValidation('api_key', item.id)} disabled={validationResults[`api_key:${item.id}`]?.loading}><MessageCircle size={13} />验证</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>

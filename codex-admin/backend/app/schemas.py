@@ -9,6 +9,7 @@ AccountStatus = Literal["normal", "limited", "banned", "expired", "disabled"]
 NoteStatus = Literal["pending", "done", "blocked"]
 ExceptionLevel = Literal["info", "warning", "error"]
 ApiKeyStatus = Literal["active", "disabled"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
 
 class ImportAuthRequest(BaseModel):
@@ -59,3 +60,4 @@ class ApiKeyUpdate(BaseModel):
 class ValidationChatRequest(BaseModel):
     prompt: str = "你好。"
     model: str = "codex-code"
+    reasoning_effort: ReasoningEffort = "low"

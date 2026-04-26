@@ -5,12 +5,13 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 
-def fake_validation_runner(*, account, prompt: str, requested_model: str) -> dict:
+def fake_validation_runner(*, account, prompt: str, requested_model: str, reasoning_effort: str) -> dict:
     return {
         "ok": True,
         "validation_mode": "codex-cli",
         "requested_model": requested_model,
         "cli_model": "gpt-5.4",
+        "reasoning_effort": reasoning_effort,
         "prompt": prompt,
         "assistant_message": f"真实 runner 测试响应：{prompt}",
     }
@@ -203,11 +204,28 @@ def test_account_auth_can_run_default_validation_chat(tmp_path):
     assert body["target_id"] == created["id"]
     assert body["prompt"] == "你好。"
     assert body["requested_model"] == "codex-code"
+    assert body["reasoning_effort"] == "low"
     assert body["validation_mode"] == "codex-cli"
     assert body["ok"] is True
     assert "你好" in body["assistant_message"]
     assert "access_token" not in str(body)
     assert "refresh_token" not in str(body)
+
+
+def test_account_auth_can_choose_model_and_reasoning_effort(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+
+    response = client.post(
+        f"/api/accounts/{created['id']}/test",
+        json={"prompt": "解释一下缓存命中", "model": "gpt-5.4", "reasoning_effort": "medium"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["prompt"] == "解释一下缓存命中"
+    assert body["requested_model"] == "gpt-5.4"
+    assert body["reasoning_effort"] == "medium"
 
 
 def test_account_auth_validation_rejects_unhealthy_account(tmp_path):
@@ -300,6 +318,7 @@ def test_api_key_can_run_default_validation_chat(tmp_path):
     assert body["target_id"] == created["id"]
     assert body["prompt"] == "你好。"
     assert body["requested_model"] == "codex-code"
+    assert body["reasoning_effort"] == "low"
     assert body["validation_mode"] == "codex-cli"
     assert body["ok"] is True
     assert "你好" in body["assistant_message"]
