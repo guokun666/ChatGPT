@@ -9,7 +9,7 @@ KEY_FILE="${KEY_FILE:-$APP_DIR/codex-admin/data/model-family-codex-api-key.txt}"
 CHANNEL_ID="${CHANNEL_ID:-86}"
 BASE_URL="${BASE_URL:-http://172.17.0.1:8091}"
 MODELS="${MODELS:-gpt-5.4,gpt-5.2-codex,gpt-5.1-codex-max,gpt-5.4-mini,gpt-5.3-codex,gpt-5.3-codex-spark,gpt-5.2,gpt-5.1-codex-mini}"
-GROUPS="${GROUPS:-vip,vip-2,kevin-self}"
+CHANNEL_GROUPS="${CHANNEL_GROUPS:-vip,vip-2,kevin-self}"
 OLD_CODEX_CHANNELS="${OLD_CODEX_CHANNELS:-16,37,80}"
 
 if [ ! -s "$KEY_FILE" ]; then
@@ -27,7 +27,7 @@ SET status = 1,
     base_url = '$BASE_URL',
     key = '$API_KEY',
     models = '$MODELS',
-    "group" = '$GROUPS',
+    "group" = '$CHANNEL_GROUPS',
     tag = 'codex'
 WHERE id = $CHANNEL_ID;
 
@@ -38,7 +38,7 @@ WHERE id IN ($OLD_CODEX_CHANNELS);
 DELETE FROM abilities WHERE channel_id = $CHANNEL_ID;
 INSERT INTO abilities ("group", model, channel_id, enabled, priority, weight, tag)
 SELECT g, m, $CHANNEL_ID, true, 100, 0, 'codex'
-FROM regexp_split_to_table('$GROUPS', ',') AS g
+FROM regexp_split_to_table('$CHANNEL_GROUPS', ',') AS g
 CROSS JOIN regexp_split_to_table('$MODELS', ',') AS m;
 
 COMMIT;
