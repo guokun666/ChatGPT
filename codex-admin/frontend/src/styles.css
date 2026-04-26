@@ -96,8 +96,15 @@ th { color: #8a8f98; font-weight: 700; background: rgba(255,255,255,0.025); }
 .strong { font-weight: 700; }
 .wrap-cell { max-width: 260px; overflow-wrap: anywhere; }
 .reason-cell { max-width: 360px; color: #d0d6e0; line-height: 1.5; }
-.actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 260px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 320px; }
 .action-bar { align-items: flex-start; }
+.validation-prompt {
+  flex-basis: 100%;
+  min-width: 240px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+}
 .validation-result {
   flex-basis: 100%;
   margin-top: 6px;

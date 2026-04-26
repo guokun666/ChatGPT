@@ -123,7 +123,7 @@ function ValidationResult({ result }) {
       <div><StatusBadge value={result.ok ? 'normal' : 'error'} /> <span className="mono">{result.validation_mode}</span></div>
       <p><strong>用户：</strong>{result.prompt}</p>
       <p><strong>助手：</strong>{result.assistant_message}</p>
-      <small>模型：{result.model} · 目标：{result.target_type} #{result.target_id}</small>
+      <small>请求模型：{result.requested_model || result.model || '-'} · CLI 模型：{result.cli_model || '-'} · 目标：{result.target_type} #{result.target_id}</small>
     </div>
   );
 }
@@ -144,6 +144,7 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [pendingAction, setPendingAction] = useState(false);
   const [validationResults, setValidationResults] = useState({});
+  const [validationPrompts, setValidationPrompts] = useState({});
 
   async function loadAll(includeDeleted = showDeleted) {
     const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
@@ -308,10 +309,11 @@ function App() {
 
   async function runValidation(targetType, id) {
     const key = `${targetType}:${id}`;
+    const prompt = validationPrompts[key]?.trim() || '你好。';
     setValidationResults((current) => ({ ...current, [key]: { loading: true } }));
     try {
       const path = targetType === 'account' ? `/api/accounts/${id}/test` : `/api/api-keys/${id}/test`;
-      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt: '你好。' }) });
+      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt }) });
       setValidationResults((current) => ({ ...current, [key]: result }));
       setMessage(`${targetType === 'account' ? 'Auth 账号' : 'API Key'} ${id} 验证通过`);
       await loadAll();
@@ -322,6 +324,15 @@ function App() {
   }
 
   const accountOptions = useMemo(() => accounts.items?.filter((account) => !account.deleted_at) || [], [accounts]);
+
+  function updateValidationPrompt(targetType, id, value) {
+    const key = `${targetType}:${id}`;
+    setValidationPrompts((current) => ({ ...current, [key]: value }));
+  }
+
+  function validationPromptValue(targetType, id) {
+    return validationPrompts[`${targetType}:${id}`] ?? '你好。';
+  }
 
   return (
     <main className="page">
@@ -393,6 +404,13 @@ function App() {
                       <button type="button" className="mini" onClick={() => restoreAccount(account.id)}>恢复</button>
                     ) : (
                       <>
+                        <input
+                          className="validation-prompt"
+                          value={validationPromptValue('account', account.id)}
+                          onChange={(event) => updateValidationPrompt('account', account.id, event.target.value)}
+                          placeholder="测试输入，默认：你好。"
+                          aria-label={`账号 ${account.id} 验证输入`}
+                        />
                         <button type="button" className="mini" onClick={() => runValidation('account', account.id)} disabled={validationResults[`account:${account.id}`]?.loading}><MessageCircle size={13} />验证</button>
                         <button type="button" className="mini" onClick={() => setEditingAccount({ ...account })}><Edit3 size={13} />编辑</button>
                         <select className="mini-select" value={account.status} onChange={(event) => updateStatus(account.id, event.target.value)} aria-label={`设置账号 ${account.id} 状态`}>
@@ -432,6 +450,13 @@ function App() {
                   <td>{item.model_scopes?.join(', ') || '全部'}</td>
                   <td>{item.last_used_at || '-'}</td>
                   <td className="actions">
+                    <input
+                      className="validation-prompt"
+                      value={validationPromptValue('api_key', item.id)}
+                      onChange={(event) => updateValidationPrompt('api_key', item.id, event.target.value)}
+                      placeholder="测试输入，默认：你好。"
+                      aria-label={`API Key ${item.id} 验证输入`}
+                    />
                     <button type="button" className="mini" onClick={() => runValidation('api_key', item.id)} disabled={validationResults[`api_key:${item.id}`]?.loading}><MessageCircle size={13} />验证</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
