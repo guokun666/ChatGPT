@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -17,8 +18,12 @@ def fake_validation_runner(*, account, prompt: str, requested_model: str, reason
     }
 
 
-def make_client(tmp_path: Path, validation_runner=fake_validation_runner) -> TestClient:
-    app = create_app(str(tmp_path / "codex-admin-test.sqlite3"), validation_runner=validation_runner)
+def make_client(tmp_path: Path, validation_runner=fake_validation_runner, upstream_handler=None) -> TestClient:
+    app = create_app(
+        str(tmp_path / "codex-admin-test.sqlite3"),
+        validation_runner=validation_runner,
+        upstream_sender=upstream_handler,
+    )
     return TestClient(app)
 
 
@@ -406,6 +411,66 @@ def test_api_key_model_scopes_can_be_updated_to_dynamic_model(tmp_path):
     assert updated.json()["model_scopes"] == ["gpt-5.4-mini"]
     assert response.status_code == 200
     assert response.json()["requested_model"] == "gpt-5.4-mini"
+
+
+def test_v1_models_requires_external_api_key(tmp_path):
+    client = make_client(tmp_path)
+
+    response = client.get("/v1/models")
+
+    assert response.status_code == 401
+
+
+def test_v1_models_uses_active_api_key_and_model_scopes(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/api-keys",
+        json={"name": "client-a", "status": "active", "model_scopes": ["gpt-5.4", "gpt-5.2-codex"]},
+    ).json()
+
+    response = client.get("/v1/models", headers={"Authorization": f"Bearer {created['key']}"})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["data"]] == ["gpt-5.4", "gpt-5.2-codex"]
+
+
+def test_v1_chat_completions_proxies_with_managed_api_key_and_account(tmp_path):
+    import httpx
+
+    upstream_calls = []
+
+    def fake_upstream(request: httpx.Request) -> httpx.Response:
+        upstream_calls.append(request)
+        assert request.url.path == "/backend-api/codex/responses"
+        payload = json.loads(request.content.decode())
+        assert payload["model"] == "gpt-5.4"
+        assert payload["store"] is False
+        assert payload["stream"] is True
+        assert payload["input"][0]["content"][0]["text"] == "Reply with ok"
+        assert request.headers["authorization"] == "Bearer ***"
+        assert request.headers["chatgpt-account-id"] == "acct-1"
+        body = "\n\n".join([
+            'data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-5.4","created_at":123}}',
+            'data: {"type":"response.output_text.delta","delta":"ok"}',
+            'data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.4","created_at":123,"usage":{"input_tokens":4,"output_tokens":1}}}',
+        ])
+        return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"}, request=request)
+
+    client = make_client(tmp_path, upstream_handler=fake_upstream)
+    client.post("/api/accounts/import", json={"auth_json": sample_auth()})
+    created = client.post("/api/api-keys", json={"name": "client-a", "status": "active"}).json()
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {created['key']}", "X-Session-Id": "session-a"},
+        json={"model": "gpt-5.4", "messages": [{"role": "user", "content": "Reply with ok"}]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["choices"][0]["message"]["content"] == "ok"
+    assert body["usage"] == {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5}
+    assert len(upstream_calls) == 1
 
 
 def test_dashboard_summary_combines_accounts_notes_exceptions_and_api_keys(tmp_path):

@@ -9,8 +9,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from .codex_proxy import CodexProxyService, UpstreamSender, public_model_payload
 
 from .schemas import (
     AccountUpdate,
@@ -223,9 +227,14 @@ def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_
 ValidationRunner = Callable[..., dict[str, Any]]
 
 
-def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunner | None = None) -> FastAPI:
+def create_app(
+    db_path: str = DEFAULT_DB_PATH,
+    validation_runner: ValidationRunner | None = None,
+    upstream_sender: UpstreamSender | None = None,
+) -> FastAPI:
     db = Database(db_path)
     validation_runner = validation_runner or run_codex_cli_validation
+    codex_proxy = CodexProxyService(db, upstream_sender=upstream_sender)
     app = FastAPI(title="Codex Admin", version="0.1.0")
     app.state.db = db
     app.add_middleware(
@@ -243,6 +252,21 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
     @app.get("/api/models")
     def list_models() -> dict[str, Any]:
         return load_codex_models()
+
+    @app.get("/v1/models")
+    def public_models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        api_key = codex_proxy.authenticate_api_key(authorization)
+        scopes = json_loads_list(api_key.get("model_scopes"))
+        models = [model for model in load_codex_models()["models"] if not scopes or model["id"] in scopes]
+        return public_model_payload(models)
+
+    @app.post("/v1/responses")
+    @app.post("/v1/responses/compact")
+    @app.post("/v1/chat/completions")
+    async def public_proxy(request: Request, authorization: str | None = Header(default=None)) -> Response:
+        api_key = codex_proxy.authenticate_api_key(authorization)
+        result = codex_proxy.proxy(str(request.url.path), await request.body(), dict(request.headers), api_key)
+        return Response(content=result.body, status_code=result.status_code, headers=result.headers)
 
     @app.post("/api/accounts/import", status_code=201)
     def import_account(payload: ImportAuthRequest) -> dict[str, Any]:
@@ -600,6 +624,22 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
             "exceptions": exception_summary,
             "api_keys": api_key_summary(api_keys),
         }
+
+    static_dir = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if static_dir.exists():
+        assets_dir = static_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        @app.get("/")
+        def frontend_index() -> FileResponse:
+            return FileResponse(static_dir / "index.html")
+
+        @app.get("/{full_path:path}")
+        def frontend_fallback(full_path: str) -> FileResponse:
+            if full_path.startswith(("api/", "v1/")):
+                raise HTTPException(status_code=404, detail="not found")
+            return FileResponse(static_dir / "index.html")
 
     return app
 
