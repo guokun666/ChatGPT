@@ -35,6 +35,26 @@ def test_import_auth_json_creates_account_without_exposing_tokens(tmp_path):
     assert "auth_raw" not in body
 
 
+def test_import_codex_cli_tokens_shape_without_top_level_device_id(tmp_path):
+    client = make_client(tmp_path)
+    auth_json = {
+        "tokens": {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "account_id": "acct-cli-1",
+        },
+        "last_refresh": "2026-01-01T00:00:00Z",
+    }
+
+    response = client.post("/api/accounts/import", json={"auth_json": auth_json})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["account_id"] == "acct-cli-1"
+    assert body["device_id"] == "acct-cli-1"
+    assert body["status_reason"] == "device_id not found in auth.json; using account_id as stable fallback"
+
+
 def test_list_accounts_returns_status_summary(tmp_path):
     client = make_client(tmp_path)
     client.post("/api/accounts/import", json={"auth_json": sample_auth("dev-1")})

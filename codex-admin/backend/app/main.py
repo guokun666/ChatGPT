@@ -69,14 +69,15 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
                     """
                     INSERT INTO accounts (
                         account_id, device_id, auth_raw, access_token, refresh_token,
-                        expires_at, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, ?)
+                        expires_at, status, status_reason, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'normal', ?, ?, ?)
                     ON CONFLICT(device_id) DO UPDATE SET
                         account_id=excluded.account_id,
                         auth_raw=excluded.auth_raw,
                         access_token=excluded.access_token,
                         refresh_token=excluded.refresh_token,
                         expires_at=excluded.expires_at,
+                        status_reason=excluded.status_reason,
                         updated_at=excluded.updated_at
                     RETURNING *
                     """,
@@ -87,6 +88,7 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
                         fields["access_token"],
                         fields["refresh_token"],
                         fields["expires_at"],
+                        fields.get("status_reason"),
                         now,
                         now,
                     ),

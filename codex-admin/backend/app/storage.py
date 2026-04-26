@@ -103,16 +103,43 @@ def row_to_account(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def extract_auth_fields(auth_json: dict[str, Any]) -> dict[str, Any]:
-    device_id = auth_json.get("device_id") or auth_json.get("deviceId") or auth_json.get("deviceID")
+    tokens = auth_json.get("tokens") if isinstance(auth_json.get("tokens"), dict) else {}
+    device_id = (
+        auth_json.get("device_id")
+        or auth_json.get("deviceId")
+        or auth_json.get("deviceID")
+        or tokens.get("device_id")
+        or tokens.get("deviceId")
+        or tokens.get("deviceID")
+    )
+    account_id = (
+        auth_json.get("account_id")
+        or auth_json.get("user_id")
+        or auth_json.get("sub")
+        or tokens.get("account_id")
+        or tokens.get("user_id")
+        or tokens.get("sub")
+    )
+    access_token = auth_json.get("access_token") or auth_json.get("accessToken") or tokens.get("access_token") or tokens.get("accessToken")
+    refresh_token = auth_json.get("refresh_token") or auth_json.get("refreshToken") or tokens.get("refresh_token") or tokens.get("refreshToken")
+    expires_at = auth_json.get("expires_at") or auth_json.get("expire_at") or auth_json.get("expiresAt") or tokens.get("expires_at") or tokens.get("expire_at") or tokens.get("expiresAt")
+    status_reason = None
+
+    if not account_id:
+        account_id = device_id
+    if not device_id and account_id:
+        device_id = account_id
+        status_reason = "device_id not found in auth.json; using account_id as stable fallback"
     if not device_id:
-        raise ValueError("auth_json missing device_id")
+        raise ValueError("auth_json missing device_id and account_id")
     return {
-        "account_id": auth_json.get("account_id") or auth_json.get("user_id") or auth_json.get("sub") or device_id,
+        "account_id": account_id or device_id,
         "device_id": device_id,
         "auth_raw": json.dumps(auth_json, ensure_ascii=False),
-        "access_token": auth_json.get("access_token") or auth_json.get("accessToken"),
-        "refresh_token": auth_json.get("refresh_token") or auth_json.get("refreshToken"),
-        "expires_at": auth_json.get("expires_at") or auth_json.get("expire_at") or auth_json.get("expiresAt"),
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_at": expires_at,
+        "status_reason": status_reason,
     }
 
 
