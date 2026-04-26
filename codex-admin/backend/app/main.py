@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,21 +52,85 @@ def json_loads_list(value: str | None) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
-def simulated_chat_validation(target_type: str, target_id: int, prompt: str, model: str, detail: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "ok": True,
-        "target_type": target_type,
-        "target_id": target_id,
-        "model": model,
-        "prompt": prompt,
-        "assistant_message": f"你好，我收到了你的验证消息：{prompt}。当前为 Codex Admin 本地验证响应，真实 Codex 协议调用接入后这里会返回上游模型结果。",
-        "validation_mode": "local-simulated-chat",
-        "detail": detail,
-    }
+def resolve_cli_model(requested_model: str) -> str:
+    configured = os.getenv("CODEX_ADMIN_CODEX_MODEL")
+    if configured:
+        return configured
+    if requested_model.startswith("gpt-"):
+        return requested_model
+    return "gpt-5.4"
 
 
-def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
+def run_codex_cli_validation(*, account: dict[str, Any], prompt: str, requested_model: str) -> dict[str, Any]:
+    auth_raw = account.get("auth_raw")
+    if not auth_raw:
+        raise RuntimeError("account auth_raw is empty; cannot run real Codex validation")
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
+        raise RuntimeError("codex CLI is not installed or not in PATH")
+
+    cli_model = resolve_cli_model(requested_model)
+    timeout_seconds = int(os.getenv("CODEX_ADMIN_VALIDATION_TIMEOUT", "120"))
+    with tempfile.TemporaryDirectory(prefix="codex-admin-validate-") as codex_home:
+        codex_home_path = Path(codex_home)
+        (codex_home_path / "auth.json").write_text(auth_raw, encoding="utf-8")
+        (codex_home_path / "config.toml").write_text(
+            "disable_response_storage = true\n"
+            f"model = {json.dumps(cli_model)}\n"
+            "model_reasoning_effort = \"low\"\n"
+            "service_tier = \"fast\"\n"
+            "sandbox_mode = \"read-only\"\n"
+            "web_search = \"disabled\"\n",
+            encoding="utf-8",
+        )
+        last_message_path = codex_home_path / "last-message.txt"
+        validation_prompt = f"请用一句中文短句直接回答用户消息，不要调用工具。用户消息：{prompt}"
+        command = [
+            codex_bin,
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "-m",
+            cli_model,
+            "-c",
+            "model_reasoning_effort=\"low\"",
+            "-c",
+            "web_search=\"disabled\"",
+            "-c",
+            "disable_response_storage=true",
+            "-o",
+            str(last_message_path),
+            validation_prompt,
+        ]
+        result = subprocess.run(
+            command,
+            cwd=tempfile.gettempdir(),
+            env={**os.environ, "CODEX_HOME": str(codex_home_path)},
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+        assistant_message = last_message_path.read_text(encoding="utf-8").strip() if last_message_path.exists() else ""
+        if result.returncode != 0 or not assistant_message:
+            stderr_tail = result.stderr[-2000:] if result.stderr else ""
+            raise RuntimeError(f"codex CLI validation failed: {stderr_tail or 'empty assistant response'}")
+        return {
+            "ok": True,
+            "validation_mode": "codex-cli",
+            "requested_model": requested_model,
+            "cli_model": cli_model,
+            "prompt": prompt,
+            "assistant_message": assistant_message,
+        }
+
+
+ValidationRunner = Callable[..., dict[str, Any]]
+
+
+def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunner | None = None) -> FastAPI:
     db = Database(db_path)
+    validation_runner = validation_runner or run_codex_cli_validation
     app = FastAPI(title="Codex Admin", version="0.1.0")
     app.state.db = db
     app.add_middleware(
@@ -254,13 +321,16 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
                 raise HTTPException(status_code=400, detail="account is deleted")
             if row["status"] != "normal":
                 raise HTTPException(status_code=400, detail=f"account is not normal: {row['status']}")
-        return simulated_chat_validation(
-            "account",
-            account_id,
-            payload.prompt,
-            payload.model,
-            {"account_id": row["account_id"], "device_id": row["device_id"], "status": row["status"]},
-        )
+        try:
+            result = validation_runner(account=dict(row), prompt=payload.prompt, requested_model=payload.model)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "target_type": "account",
+            "target_id": account_id,
+            **result,
+            "detail": {"account_id": row["account_id"], "device_id": row["device_id"], "status": row["status"]},
+        }
 
     @app.post("/api/research-notes", status_code=201)
     def create_research_note(payload: ResearchNoteCreate) -> dict[str, Any]:
@@ -383,14 +453,28 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
             scopes = json_loads_list(row["model_scopes"])
             if scopes and payload.model not in scopes:
                 raise HTTPException(status_code=400, detail=f"model {payload.model} is not allowed by this api key")
+            account = conn.execute(
+                "SELECT * FROM accounts WHERE deleted_at IS NULL AND status = 'normal' ORDER BY updated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+            if not account:
+                raise HTTPException(status_code=400, detail="no normal auth account available for real validation")
             conn.execute("UPDATE api_keys SET last_used_at = ?, updated_at = ? WHERE id = ?", (now, now, api_key_id))
-        return simulated_chat_validation(
-            "api_key",
-            api_key_id,
-            payload.prompt,
-            payload.model,
-            {"name": row["name"], "key_preview": row["key_preview"], "model_scopes": scopes},
-        )
+        try:
+            result = validation_runner(account=dict(account), prompt=payload.prompt, requested_model=payload.model)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "target_type": "api_key",
+            "target_id": api_key_id,
+            **result,
+            "detail": {
+                "name": row["name"],
+                "key_preview": row["key_preview"],
+                "model_scopes": scopes,
+                "upstream_account_id": account["id"],
+                "upstream_device_id": account["device_id"],
+            },
+        }
 
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:

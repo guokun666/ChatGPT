@@ -134,6 +134,7 @@ def extract_auth_fields(auth_json: dict[str, Any]) -> dict[str, Any]:
     )
     access_token = auth_json.get("access_token") or auth_json.get("accessToken") or tokens.get("access_token") or tokens.get("accessToken")
     refresh_token = auth_json.get("refresh_token") or auth_json.get("refreshToken") or tokens.get("refresh_token") or tokens.get("refreshToken")
+    id_token = auth_json.get("id_token") or auth_json.get("idToken") or tokens.get("id_token") or tokens.get("idToken")
     expires_at = auth_json.get("expires_at") or auth_json.get("expire_at") or auth_json.get("expiresAt") or tokens.get("expires_at") or tokens.get("expire_at") or tokens.get("expiresAt")
     status_reason = None
 
@@ -148,6 +149,8 @@ def extract_auth_fields(auth_json: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("auth_json missing access_token")
     if not refresh_token:
         raise ValueError("auth_json missing refresh_token")
+    if not id_token:
+        raise ValueError("auth_json missing id_token")
     return {
         "account_id": account_id or device_id,
         "device_id": device_id,

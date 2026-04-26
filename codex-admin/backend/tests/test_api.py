@@ -5,8 +5,19 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 
-def make_client(tmp_path: Path) -> TestClient:
-    app = create_app(str(tmp_path / "codex-admin-test.sqlite3"))
+def fake_validation_runner(*, account, prompt: str, requested_model: str) -> dict:
+    return {
+        "ok": True,
+        "validation_mode": "codex-cli",
+        "requested_model": requested_model,
+        "cli_model": "gpt-5.4",
+        "prompt": prompt,
+        "assistant_message": f"真实 runner 测试响应：{prompt}",
+    }
+
+
+def make_client(tmp_path: Path, validation_runner=fake_validation_runner) -> TestClient:
+    app = create_app(str(tmp_path / "codex-admin-test.sqlite3"), validation_runner=validation_runner)
     return TestClient(app)
 
 
@@ -14,8 +25,9 @@ def sample_auth(device_id: str = "dev-1") -> dict:
     return {
         "account_id": "acct-1",
         "device_id": device_id,
-        "access_token": "access-token",
-        "refresh_token": "refresh-token",
+        "access_token": "***",
+        "refresh_token": "***",
+        "id_token": "***",
         "expires_at": "2099-01-01T00:00:00+00:00",
     }
 
@@ -41,6 +53,7 @@ def test_import_codex_cli_tokens_shape_without_top_level_device_id(tmp_path):
         "tokens": {
             "access_token": "***",
             "refresh_token": "***",
+            "id_token": "***",
             "account_id": "acct-cli-1",
         },
         "last_refresh": "2026-01-01T00:00:00Z",
@@ -62,6 +75,22 @@ def test_import_rejects_auth_json_without_tokens(tmp_path):
 
     assert response.status_code == 400
     assert "missing access_token" in response.json()["detail"]
+
+
+def test_import_rejects_codex_auth_without_id_token(tmp_path):
+    client = make_client(tmp_path)
+    auth_json = {
+        "tokens": {
+            "access_token": "***",
+            "refresh_token": "***",
+            "account_id": "acct-no-id-token",
+        }
+    }
+
+    response = client.post("/api/accounts/import", json={"auth_json": auth_json})
+
+    assert response.status_code == 400
+    assert "missing id_token" in response.json()["detail"]
 
 
 def test_list_accounts_returns_status_summary(tmp_path):
@@ -130,8 +159,9 @@ def test_account_edit_can_update_auth_json_without_returning_secrets(tmp_path):
     created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
     new_auth = {
         "tokens": {
-            "access_token": "new-access-token",
-            "refresh_token": "new-refresh-token",
+            "access_token": "***",
+            "refresh_token": "***",
+            "id_token": "***",
             "account_id": "acct-from-edit-auth",
             "device_id": "dev-from-edit-auth",
         },
@@ -172,6 +202,8 @@ def test_account_auth_can_run_default_validation_chat(tmp_path):
     assert body["target_type"] == "account"
     assert body["target_id"] == created["id"]
     assert body["prompt"] == "你好。"
+    assert body["requested_model"] == "codex-code"
+    assert body["validation_mode"] == "codex-cli"
     assert body["ok"] is True
     assert "你好" in body["assistant_message"]
     assert "access_token" not in str(body)
@@ -254,6 +286,7 @@ def test_api_keys_can_be_created_listed_disabled_and_deleted(tmp_path):
 
 def test_api_key_can_run_default_validation_chat(tmp_path):
     client = make_client(tmp_path)
+    client.post("/api/accounts/import", json={"auth_json": sample_auth()})
     created = client.post(
         "/api/api-keys",
         json={"name": "client-a", "status": "active", "rate_limit_per_minute": 60, "model_scopes": ["codex-code"]},
@@ -266,7 +299,8 @@ def test_api_key_can_run_default_validation_chat(tmp_path):
     assert body["target_type"] == "api_key"
     assert body["target_id"] == created["id"]
     assert body["prompt"] == "你好。"
-    assert body["model"] == "codex-code"
+    assert body["requested_model"] == "codex-code"
+    assert body["validation_mode"] == "codex-cli"
     assert body["ok"] is True
     assert "你好" in body["assistant_message"]
     assert created["key"] not in str(body)
