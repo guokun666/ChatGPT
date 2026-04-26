@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, Database, FileText, RefreshCw, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Database, FileText, KeyRound, RefreshCw, UploadCloud } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
@@ -38,22 +38,26 @@ function App() {
   const [dashboard, setDashboard] = useState({ accounts: {}, research_notes: {}, exceptions: {} });
   const [notes, setNotes] = useState([]);
   const [exceptions, setExceptions] = useState([]);
+  const [apiKeys, setApiKeys] = useState({ summary: {}, items: [] });
   const [authText, setAuthText] = useState('');
   const [noteForm, setNoteForm] = useState({ title: '', status: 'pending', content: '' });
   const [exceptionForm, setExceptionForm] = useState({ account_id: '', level: 'warning', message: '', detail: '' });
+  const [apiKeyForm, setApiKeyForm] = useState({ name: '', rate_limit_per_minute: 60, model_scopes: 'codex-code,code-mini' });
   const [message, setMessage] = useState('');
 
   async function loadAll() {
-    const [accountData, dashboardData, noteData, exceptionData] = await Promise.all([
+    const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
       api('/api/accounts'),
       api('/api/dashboard'),
       api('/api/research-notes'),
       api('/api/exceptions'),
+      api('/api/api-keys'),
     ]);
     setAccounts(accountData);
     setDashboard(dashboardData);
     setNotes(noteData.items || []);
     setExceptions(exceptionData.items || []);
+    setApiKeys(apiKeyData);
   }
 
   useEffect(() => {
@@ -106,6 +110,35 @@ function App() {
     await loadAll();
   }
 
+  async function createApiKey(event) {
+    event.preventDefault();
+    const scopes = apiKeyForm.model_scopes.split(',').map((item) => item.trim()).filter(Boolean);
+    const created = await api('/api/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: apiKeyForm.name,
+        status: 'active',
+        rate_limit_per_minute: Number(apiKeyForm.rate_limit_per_minute) || null,
+        model_scopes: scopes,
+      }),
+    });
+    setApiKeyForm({ name: '', rate_limit_per_minute: 60, model_scopes: 'codex-code,code-mini' });
+    setMessage(`API Key 已创建，只显示一次：${created.key}`);
+    await loadAll();
+  }
+
+  async function updateApiKeyStatus(apiKeyId, status) {
+    await api(`/api/api-keys/${apiKeyId}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    setMessage(`API Key ${apiKeyId} 已设置为 ${status}`);
+    await loadAll();
+  }
+
+  async function deleteApiKey(apiKeyId) {
+    await api(`/api/api-keys/${apiKeyId}`, { method: 'DELETE' });
+    setMessage(`API Key ${apiKeyId} 已删除`);
+    await loadAll();
+  }
+
   const accountOptions = useMemo(() => accounts.items || [], [accounts]);
 
   return (
@@ -126,6 +159,7 @@ function App() {
         <StatCard icon={<Database />} label="正常账号" value={dashboard.accounts?.normal || 0} tone="ok" />
         <StatCard icon={<AlertTriangle />} label="异常账号" value={(dashboard.accounts?.limited || 0) + (dashboard.accounts?.banned || 0) + (dashboard.accounts?.expired || 0)} tone="warn" />
         <StatCard icon={<FileText />} label="调研记录" value={dashboard.research_notes?.total || 0} />
+        <StatCard icon={<KeyRound />} label="对外 API Key" value={dashboard.api_keys?.total || 0} />
         <StatCard icon={<AlertTriangle />} label="异常记录" value={dashboard.exceptions?.total || 0} tone="danger" />
       </section>
 
@@ -166,6 +200,39 @@ function App() {
                     {['normal', 'limited', 'banned', 'expired', 'disabled'].map((status) => (
                       <button key={status} className="mini" onClick={() => updateStatus(account.id, status)}>{status}</button>
                     ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>对外 API Key 管理</h2>
+        <form className="api-key-form" onSubmit={createApiKey}>
+          <input value={apiKeyForm.name} onChange={(e) => setApiKeyForm({ ...apiKeyForm, name: e.target.value })} placeholder="Key 名称，例如 cursor-client" />
+          <input type="number" value={apiKeyForm.rate_limit_per_minute} onChange={(e) => setApiKeyForm({ ...apiKeyForm, rate_limit_per_minute: e.target.value })} placeholder="每分钟限流" />
+          <input value={apiKeyForm.model_scopes} onChange={(e) => setApiKeyForm({ ...apiKeyForm, model_scopes: e.target.value })} placeholder="模型范围，逗号分隔" />
+          <button>创建 API Key</button>
+        </form>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>名称</th><th>Key 预览</th><th>状态</th><th>限流/分钟</th><th>模型权限</th><th>最后使用</th><th>操作</th></tr></thead>
+            <tbody>
+              {apiKeys.items?.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>{item.name}</td>
+                  <td className="mono">{item.key_preview}</td>
+                  <td><StatusBadge value={item.status} /></td>
+                  <td>{item.rate_limit_per_minute || '-'}</td>
+                  <td>{item.model_scopes?.join(', ') || '全部'}</td>
+                  <td>{item.last_used_at || '-'}</td>
+                  <td className="actions">
+                    <button className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
+                    <button className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
+                    <button className="mini danger-button" onClick={() => deleteApiKey(item.id)}>删除</button>
                   </td>
                 </tr>
               ))}

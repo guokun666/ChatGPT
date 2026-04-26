@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -8,14 +9,35 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .schemas import ExceptionCreate, ImportAuthRequest, ResearchNoteCreate, UpdateAccountStatusRequest
-from .storage import Database, account_summary, extract_auth_fields, row_to_account, utc_now
+from .schemas import (
+    ApiKeyCreate,
+    ApiKeyUpdate,
+    ExceptionCreate,
+    ImportAuthRequest,
+    ResearchNoteCreate,
+    UpdateAccountStatusRequest,
+)
+from .storage import (
+    Database,
+    account_summary,
+    api_key_summary,
+    extract_auth_fields,
+    generate_api_key,
+    key_preview,
+    row_to_account,
+    row_to_api_key,
+    utc_now,
+)
 
 
 DEFAULT_DB_PATH = os.getenv(
     "CODEX_ADMIN_DB",
     str((Path(__file__).resolve().parents[1] / "data" / "codex-admin.sqlite3")),
 )
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
@@ -152,6 +174,68 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
             ).fetchall()
         return {"items": [dict(row) for row in rows]}
 
+    @app.post("/api/api-keys", status_code=201)
+    def create_api_key(payload: ApiKeyCreate) -> dict[str, Any]:
+        now = utc_now()
+        key = generate_api_key()
+        with db.connect() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO api_keys (name, key, key_preview, status, rate_limit_per_minute, model_scopes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING *
+                """,
+                (
+                    payload.name,
+                    key,
+                    key_preview(key),
+                    payload.status,
+                    payload.rate_limit_per_minute,
+                    json_dumps(payload.model_scopes),
+                    now,
+                    now,
+                ),
+            ).fetchone()
+        return row_to_api_key(row, include_key=True)
+
+    @app.get("/api/api-keys")
+    def list_api_keys() -> dict[str, Any]:
+        with db.connect() as conn:
+            rows = conn.execute("SELECT * FROM api_keys ORDER BY updated_at DESC, id DESC").fetchall()
+        items = [row_to_api_key(row) for row in rows]
+        return {"summary": api_key_summary(items), "items": items}
+
+    @app.patch("/api/api-keys/{api_key_id}")
+    def update_api_key(api_key_id: int, payload: ApiKeyUpdate) -> dict[str, Any]:
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM api_keys WHERE id = ?", (api_key_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="api key not found")
+            updated = {
+                "name": payload.name if payload.name is not None else row["name"],
+                "status": payload.status if payload.status is not None else row["status"],
+                "rate_limit_per_minute": payload.rate_limit_per_minute if payload.rate_limit_per_minute is not None else row["rate_limit_per_minute"],
+                "model_scopes": json_dumps(payload.model_scopes) if payload.model_scopes is not None else row["model_scopes"],
+            }
+            cursor = conn.execute(
+                """
+                UPDATE api_keys SET name = ?, status = ?, rate_limit_per_minute = ?, model_scopes = ?, updated_at = ?
+                WHERE id = ?
+                RETURNING *
+                """,
+                (updated["name"], updated["status"], updated["rate_limit_per_minute"], updated["model_scopes"], utc_now(), api_key_id),
+            )
+            updated_row = cursor.fetchone()
+        return row_to_api_key(updated_row)
+
+    @app.delete("/api/api-keys/{api_key_id}", status_code=204)
+    def delete_api_key(api_key_id: int) -> None:
+        with db.connect() as conn:
+            cursor = conn.execute("DELETE FROM api_keys WHERE id = ?", (api_key_id,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="api key not found")
+        return None
+
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:
         accounts = list_accounts()["summary"]
@@ -163,7 +247,13 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
         exception_summary = {"total": len(exceptions), "info": 0, "warning": 0, "error": 0}
         for item in exceptions:
             exception_summary[item["level"]] += 1
-        return {"accounts": accounts, "research_notes": note_summary, "exceptions": exception_summary}
+        api_keys = list_api_keys()["items"]
+        return {
+            "accounts": accounts,
+            "research_notes": note_summary,
+            "exceptions": exception_summary,
+            "api_keys": api_key_summary(api_keys),
+        }
 
     return app
 

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 AccountStatus = Literal["normal", "limited", "banned", "expired", "disabled"]
 NoteStatus = Literal["pending", "done", "blocked"]
 ExceptionLevel = Literal["info", "warning", "error"]
+ApiKeyStatus = Literal["active", "disabled"]
 
 
 class ImportAuthRequest(BaseModel):
@@ -30,3 +31,17 @@ class ExceptionCreate(BaseModel):
     level: ExceptionLevel
     message: str = Field(min_length=1)
     detail: str = ""
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1)
+    status: ApiKeyStatus = "active"
+    rate_limit_per_minute: int | None = None
+    model_scopes: list[str] = Field(default_factory=list)
+
+
+class ApiKeyUpdate(BaseModel):
+    name: str | None = None
+    status: ApiKeyStatus | None = None
+    rate_limit_per_minute: int | None = None
+    model_scopes: list[str] | None = None

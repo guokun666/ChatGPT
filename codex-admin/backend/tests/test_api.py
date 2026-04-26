@@ -84,12 +84,43 @@ def test_research_notes_can_be_recorded_and_listed(tmp_path):
     assert listed.json()["items"][0]["status"] == "pending"
 
 
-def test_dashboard_summary_combines_accounts_notes_and_exceptions(tmp_path):
+def test_api_keys_can_be_created_listed_disabled_and_deleted(tmp_path):
+    client = make_client(tmp_path)
+
+    created = client.post(
+        "/api/api-keys",
+        json={"name": "client-a", "status": "active", "rate_limit_per_minute": 60, "model_scopes": ["codex-code"]},
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["name"] == "client-a"
+    assert body["key"].startswith("ck-")
+    assert body["key_preview"].startswith("ck-")
+    assert body["status"] == "active"
+    assert body["model_scopes"] == ["codex-code"]
+
+    listed = client.get("/api/api-keys").json()["items"]
+    assert listed[0]["name"] == "client-a"
+    assert "key" not in listed[0]
+
+    disabled = client.patch(f"/api/api-keys/{body['id']}", json={"status": "disabled"})
+    assert disabled.status_code == 200
+    assert disabled.json()["status"] == "disabled"
+
+    deleted = client.delete(f"/api/api-keys/{body['id']}")
+    assert deleted.status_code == 204
+    assert client.get("/api/api-keys").json()["items"] == []
+
+
+
+def test_dashboard_summary_combines_accounts_notes_exceptions_and_api_keys(tmp_path):
     client = make_client(tmp_path)
     account = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
     client.patch(f"/api/accounts/{account['id']}/status", json={"status": "banned", "reason": "risk"})
     client.post("/api/research-notes", json={"title": "SDK check", "status": "done", "content": "checked"})
     client.post("/api/exceptions", json={"account_id": account["id"], "level": "error", "message": "risk", "detail": "banned"})
+    client.post("/api/api-keys", json={"name": "client-a", "status": "active", "rate_limit_per_minute": 60})
 
     response = client.get("/api/dashboard")
 
@@ -100,3 +131,4 @@ def test_dashboard_summary_combines_accounts_notes_and_exceptions(tmp_path):
     assert body["research_notes"] == {"total": 1, "done": 1, "pending": 0, "blocked": 0}
     assert body["exceptions"]["total"] == 1
     assert body["exceptions"]["error"] == 1
+    assert body["api_keys"] == {"total": 1, "active": 1, "disabled": 0}

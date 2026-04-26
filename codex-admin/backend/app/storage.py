@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -68,6 +69,19 @@ class Database:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(account_id) REFERENCES accounts(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    key TEXT NOT NULL UNIQUE,
+                    key_preview TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    rate_limit_per_minute INTEGER,
+                    model_scopes TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT
+                );
                 """,
             )
 
@@ -104,6 +118,39 @@ def extract_auth_fields(auth_json: dict[str, Any]) -> dict[str, Any]:
 
 def account_summary(items: list[dict[str, Any]]) -> dict[str, int]:
     summary = {"total": len(items), "normal": 0, "limited": 0, "banned": 0, "expired": 0, "disabled": 0}
+    for item in items:
+        if item["status"] in summary:
+            summary[item["status"]] += 1
+    return summary
+
+
+def generate_api_key() -> str:
+    return f"ck-{secrets.token_urlsafe(32)}"
+
+
+def key_preview(key: str) -> str:
+    return f"{key[:8]}...{key[-4:]}"
+
+
+def row_to_api_key(row: sqlite3.Row, include_key: bool = False) -> dict[str, Any]:
+    data = {
+        "id": row["id"],
+        "name": row["name"],
+        "key_preview": row["key_preview"],
+        "status": row["status"],
+        "rate_limit_per_minute": row["rate_limit_per_minute"],
+        "model_scopes": json.loads(row["model_scopes"] or "[]"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_used_at": row["last_used_at"],
+    }
+    if include_key:
+        data["key"] = row["key"]
+    return data
+
+
+def api_key_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {"total": len(items), "active": 0, "disabled": 0}
     for item in items:
         if item["status"] in summary:
             summary[item["status"]] += 1
