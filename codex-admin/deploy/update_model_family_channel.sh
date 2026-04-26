@@ -7,7 +7,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/home/apple/codex-admin}"
 KEY_FILE="${KEY_FILE:-$APP_DIR/codex-admin/data/model-family-codex-api-key.txt}"
 CHANNEL_ID="${CHANNEL_ID:-86}"
-BASE_URL="${BASE_URL:-http://172.17.0.1:8091}"
+BASE_URL="${BASE_URL:-http://codex-api.4yailab.com}"
 MODELS="${MODELS:-gpt-5.4,gpt-5.2-codex,gpt-5.1-codex-max,gpt-5.4-mini,gpt-5.3-codex,gpt-5.3-codex-spark,gpt-5.2,gpt-5.1-codex-mini}"
 CHANNEL_GROUPS="${CHANNEL_GROUPS:-vip,vip-2,kevin-self}"
 OLD_CODEX_CHANNELS="${OLD_CODEX_CHANNELS:-16,37,80}"
