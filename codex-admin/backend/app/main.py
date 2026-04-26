@@ -60,13 +60,46 @@ def codex_models_cache_path() -> Path:
     return codex_home / "models_cache.json"
 
 
-def fallback_models() -> list[dict[str, Any]]:
+def codex_native_menu_models() -> list[dict[str, Any]]:
+    """Models observed in the native Codex model picker.
+
+    The Codex CLI cache can be incomplete even when the native picker exposes
+    additional Codex-only model slugs. Keep this list as a conservative union
+    source, then let cache entries override labels/descriptions/effort defaults.
+    """
+    efforts = ["low", "medium", "high", "xhigh"]
     return [
-        {"id": "gpt-5.4", "label": "gpt-5.4", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
-        {"id": "gpt-5.3-codex", "label": "gpt-5.3-codex", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
-        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
+        {"id": "gpt-5.4", "label": "GPT-5.4", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.2-codex", "label": "GPT-5.2-Codex", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1-Codex-Max", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.3-codex", "label": "GPT-5.3-Codex", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "reasoning_efforts": efforts, "default_reasoning_effort": "high"},
+        {"id": "gpt-5.2", "label": "GPT-5.2", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
+        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1-Codex-Mini", "reasoning_efforts": efforts, "default_reasoning_effort": "medium"},
     ]
+
+
+def fallback_models() -> list[dict[str, Any]]:
+    return codex_native_menu_models()
+
+
+def merge_native_and_cached_models(cached_models: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    native_models = codex_native_menu_models()
+    native_order = [item["id"] for item in native_models]
+    native_by_id = {item["id"]: item for item in native_models}
+    cached_by_id = {item["id"]: item for item in cached_models}
+
+    # Preserve newly introduced upstream/cache models first so future models such
+    # as gpt-5.5 are not hidden behind our conservative native-menu supplement.
+    unknown_cached = [item for item in cached_models if item["id"] not in native_by_id]
+    known_native_ordered = []
+    for model_id in native_order:
+        if model_id in cached_by_id:
+            known_native_ordered.append({**native_by_id[model_id], **cached_by_id[model_id]})
+        else:
+            known_native_ordered.append(native_by_id[model_id])
+    return unknown_cached + known_native_ordered
 
 
 def load_codex_models() -> dict[str, Any]:
@@ -93,6 +126,7 @@ def load_codex_models() -> dict[str, Any]:
             )
         if not models:
             raise ValueError("no list-visible models found")
+        models = merge_native_and_cached_models(models)
         return {
             "source": source,
             "fetched_at": data.get("fetched_at"),

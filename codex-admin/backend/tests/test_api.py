@@ -55,6 +55,24 @@ def test_models_endpoint_reads_codex_model_cache(tmp_path, monkeypatch):
     assert body["fetched_at"] is None
 
 
+def test_models_endpoint_includes_codex_native_menu_models_when_cache_is_incomplete(tmp_path, monkeypatch):
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(
+        '{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","supported_reasoning_levels":[{"effort":"medium"}],"visibility":"list"},{"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","supported_reasoning_levels":[{"effort":"medium"}],"visibility":"list"}],"fetched_at":"2026-04-26T17:15:53Z","client_version":"0.119.0"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_ADMIN_MODELS_CACHE", str(cache_path))
+    client = make_client(tmp_path)
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    model_ids = [item["id"] for item in response.json()["models"]]
+    assert model_ids[:3] == ["gpt-5.4", "gpt-5.2-codex", "gpt-5.1-codex-max"]
+    assert "gpt-5.1-codex-mini" in model_ids
+    assert len(model_ids) == len(set(model_ids))
+
+
 def test_import_auth_json_creates_account_without_exposing_tokens(tmp_path):
     client = make_client(tmp_path)
 
