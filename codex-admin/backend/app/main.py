@@ -6,10 +6,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .schemas import (
+    AccountUpdate,
     ApiKeyCreate,
     ApiKeyUpdate,
     ExceptionCreate,
@@ -99,11 +100,92 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
         return row_to_account(row)
 
     @app.get("/api/accounts")
-    def list_accounts() -> dict[str, Any]:
+    def list_accounts(include_deleted: bool = Query(False)) -> dict[str, Any]:
         with db.connect() as conn:
-            rows = conn.execute("SELECT * FROM accounts ORDER BY updated_at DESC, id DESC").fetchall()
+            if include_deleted:
+                rows = conn.execute("SELECT * FROM accounts ORDER BY updated_at DESC, id DESC").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM accounts WHERE deleted_at IS NULL ORDER BY updated_at DESC, id DESC").fetchall()
         items = [row_to_account(row) for row in rows]
         return {"summary": account_summary(items), "items": items}
+
+    @app.get("/api/accounts/{account_id}")
+    def get_account(account_id: int) -> dict[str, Any]:
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="account not found")
+        return row_to_account(row)
+
+    @app.patch("/api/accounts/{account_id}")
+    def update_account(account_id: int, payload: AccountUpdate) -> dict[str, Any]:
+        updates = payload.model_dump(exclude_unset=True)
+        if not updates:
+            return get_account(account_id)
+        with db.connect() as conn:
+            existing = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="account not found")
+            try:
+                row = conn.execute(
+                    """
+                    UPDATE accounts SET
+                        account_id = COALESCE(?, account_id),
+                        device_id = COALESCE(?, device_id),
+                        expires_at = COALESCE(?, expires_at),
+                        status = COALESCE(?, status),
+                        status_reason = COALESCE(?, status_reason),
+                        updated_at = ?
+                    WHERE id = ?
+                    RETURNING *
+                    """,
+                    (
+                        updates.get("account_id"),
+                        updates.get("device_id"),
+                        updates.get("expires_at"),
+                        updates.get("status"),
+                        updates.get("status_reason"),
+                        utc_now(),
+                        account_id,
+                    ),
+                ).fetchone()
+            except sqlite3.IntegrityError as exc:
+                raise HTTPException(status_code=409, detail="device_id already exists") from exc
+        return row_to_account(row)
+
+    @app.delete("/api/accounts/{account_id}", status_code=204)
+    def delete_account(account_id: int) -> None:
+        now = utc_now()
+        with db.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE accounts SET deleted_at = ?, deleted_reason = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (now, "manual delete", now, account_id),
+            )
+            if cursor.rowcount == 0:
+                row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="account not found")
+        return None
+
+    @app.post("/api/accounts/{account_id}/restore")
+    def restore_account(account_id: int) -> dict[str, Any]:
+        now = utc_now()
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="account not found")
+            restored = conn.execute(
+                """
+                UPDATE accounts SET deleted_at = NULL, deleted_reason = NULL, updated_at = ?
+                WHERE id = ?
+                RETURNING *
+                """,
+                (now, account_id),
+            ).fetchone()
+        return row_to_account(restored)
 
     @app.patch("/api/accounts/{account_id}/status")
     def update_account_status(account_id: int, payload: UpdateAccountStatusRequest) -> dict[str, Any]:

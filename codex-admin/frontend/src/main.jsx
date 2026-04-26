@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, Database, FileText, KeyRound, RefreshCw, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Database, Edit3, FileText, KeyRound, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const ACCOUNT_STATUSES = ['normal', 'limited', 'banned', 'expired', 'disabled'];
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -14,7 +15,9 @@ async function api(path, options = {}) {
     const detail = await response.text();
     throw new Error(detail || `HTTP ${response.status}`);
   }
-  return response.json();
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 function StatCard({ icon, label, value, tone = 'default' }) {
@@ -33,9 +36,83 @@ function StatusBadge({ value }) {
   return <span className={`badge badge-${value}`}>{value}</span>;
 }
 
+function Field({ label, children }) {
+  return (
+    <label className="field-label">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function AccountEditDialog({ account, onChange, onClose, onSave, pending }) {
+  if (!account) return null;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-account-title">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">Edit account</p>
+            <h2 id="edit-account-title">编辑账号</h2>
+          </div>
+          <button type="button" className="mini" onClick={onClose}>关闭</button>
+        </header>
+        <form className="modal-form" onSubmit={onSave}>
+          <Field label="Account ID">
+            <input value={account.account_id || ''} onChange={(event) => onChange({ ...account, account_id: event.target.value })} />
+          </Field>
+          <Field label="DeviceID">
+            <input value={account.device_id || ''} onChange={(event) => onChange({ ...account, device_id: event.target.value })} />
+          </Field>
+          <Field label="过期时间">
+            <input value={account.expires_at || ''} onChange={(event) => onChange({ ...account, expires_at: event.target.value })} placeholder="例如 2099-01-01T00:00:00+00:00" />
+          </Field>
+          <Field label="状态">
+            <select value={account.status || 'normal'} onChange={(event) => onChange({ ...account, status: event.target.value })}>
+              {ACCOUNT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </Field>
+          <Field label="原因 / 备注">
+            <textarea value={account.status_reason || ''} onChange={(event) => onChange({ ...account, status_reason: event.target.value })} placeholder="状态原因、维护备注或 fallback 说明" />
+          </Field>
+          <p className="modal-note">安全限制：这里仅编辑账号元数据；access_token / refresh_token / auth_raw 不会展示。如需更新凭证，请重新导入 auth.json。</p>
+          <footer className="modal-actions">
+            <button type="button" className="secondary" onClick={onClose} disabled={pending}>取消</button>
+            <button type="submit" disabled={pending}>{pending ? '保存中...' : '保存修改'}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmDialog({ account, onCancel, onConfirm, pending }) {
+  if (!account) return null;
+  const target = account.account_id || account.device_id || `#${account.id}`;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal danger-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" aria-describedby="delete-account-desc">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow danger-text">Danger zone</p>
+            <h2 id="delete-account-title">删除账号？</h2>
+          </div>
+        </header>
+        <p id="delete-account-desc" className="modal-note">
+          这会把账号 <span className="mono strong">{target}</span> 从默认账号库中移除。当前实现是软删除，后续仍可通过后端 restore 接口恢复。
+        </p>
+        <footer className="modal-actions">
+          <button type="button" className="secondary" onClick={onCancel} disabled={pending}>取消</button>
+          <button type="button" className="danger-primary" onClick={onConfirm} disabled={pending}>{pending ? '删除中...' : '删除账号'}</button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [accounts, setAccounts] = useState({ summary: {}, items: [] });
-  const [dashboard, setDashboard] = useState({ accounts: {}, research_notes: {}, exceptions: {} });
+  const [dashboard, setDashboard] = useState({ accounts: {}, research_notes: {}, exceptions: {}, api_keys: {} });
   const [notes, setNotes] = useState([]);
   const [exceptions, setExceptions] = useState([]);
   const [apiKeys, setApiKeys] = useState({ summary: {}, items: [] });
@@ -44,10 +121,14 @@ function App() {
   const [exceptionForm, setExceptionForm] = useState({ account_id: '', level: 'warning', message: '', detail: '' });
   const [apiKeyForm, setApiKeyForm] = useState({ name: '', rate_limit_per_minute: 60, model_scopes: 'codex-code,code-mini' });
   const [message, setMessage] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [pendingAction, setPendingAction] = useState(false);
 
-  async function loadAll() {
+  async function loadAll(includeDeleted = showDeleted) {
     const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
-      api('/api/accounts'),
+      api(`/api/accounts?include_deleted=${includeDeleted ? 'true' : 'false'}`),
       api('/api/dashboard'),
       api('/api/research-notes'),
       api('/api/exceptions'),
@@ -61,8 +142,8 @@ function App() {
   }
 
   useEffect(() => {
-    loadAll().catch((error) => setMessage(`加载失败：${error.message}`));
-  }, []);
+    loadAll(showDeleted).catch((error) => setMessage(`加载失败：${error.message}`));
+  }, [showDeleted]);
 
   async function importAuth(event) {
     event.preventDefault();
@@ -78,12 +159,66 @@ function App() {
   }
 
   async function updateStatus(accountId, status) {
-    await api(`/api/accounts/${accountId}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status, reason: `manual set ${status}` }),
-    });
-    setMessage(`账号 ${accountId} 已设置为 ${status}`);
-    await loadAll();
+    try {
+      await api(`/api/accounts/${accountId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, reason: `manual set ${status}` }),
+      });
+      setMessage(`账号 ${accountId} 已设置为 ${status}`);
+      await loadAll();
+    } catch (error) {
+      setMessage(`状态更新失败：${error.message}`);
+    }
+  }
+
+  async function saveEditingAccount(event) {
+    event.preventDefault();
+    if (!editingAccount) return;
+    setPendingAction(true);
+    try {
+      await api(`/api/accounts/${editingAccount.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          account_id: editingAccount.account_id,
+          device_id: editingAccount.device_id,
+          expires_at: editingAccount.expires_at || null,
+          status: editingAccount.status,
+          status_reason: editingAccount.status_reason || null,
+        }),
+      });
+      setMessage(`账号 ${editingAccount.id} 已更新`);
+      setEditingAccount(null);
+      await loadAll();
+    } catch (error) {
+      setMessage(`保存账号失败：${error.message}`);
+    } finally {
+      setPendingAction(false);
+    }
+  }
+
+  async function deleteAccount() {
+    if (!deleteTarget) return;
+    setPendingAction(true);
+    try {
+      await api(`/api/accounts/${deleteTarget.id}`, { method: 'DELETE' });
+      setMessage(`账号 ${deleteTarget.id} 已删除`);
+      setDeleteTarget(null);
+      await loadAll(false);
+    } catch (error) {
+      setMessage(`删除账号失败：${error.message}`);
+    } finally {
+      setPendingAction(false);
+    }
+  }
+
+  async function restoreAccount(accountId) {
+    try {
+      await api(`/api/accounts/${accountId}/restore`, { method: 'POST' });
+      setMessage(`账号 ${accountId} 已恢复`);
+      await loadAll();
+    } catch (error) {
+      setMessage(`恢复账号失败：${error.message}`);
+    }
   }
 
   async function createNote(event) {
@@ -139,7 +274,7 @@ function App() {
     await loadAll();
   }
 
-  const accountOptions = useMemo(() => accounts.items || [], [accounts]);
+  const accountOptions = useMemo(() => accounts.items?.filter((account) => !account.deleted_at) || [], [accounts]);
 
   return (
     <main className="page">
@@ -152,7 +287,7 @@ function App() {
         <button className="secondary" onClick={() => loadAll()}><RefreshCw size={16} />刷新</button>
       </header>
 
-      {message && <div className="message">{message}</div>}
+      {message && <div className="message" role="status" aria-live="polite">{message}</div>}
 
       <section className="grid stats">
         <StatCard icon={<Database />} label="账号总数" value={dashboard.accounts?.total || 0} />
@@ -166,7 +301,7 @@ function App() {
       <section className="panel two-col">
         <form onSubmit={importAuth}>
           <h2><UploadCloud size={18} /> 导入 auth.json</h2>
-          <textarea value={authText} onChange={(e) => setAuthText(e.target.value)} placeholder='粘贴单个 auth.json 内容，例如 {"device_id":"..."}' />
+          <textarea value={authText} onChange={(event) => setAuthText(event.target.value)} placeholder='粘贴单个 auth.json 内容，例如 {"tokens":{"access_token":"..."}}' />
           <button type="submit">导入/更新账号</button>
         </form>
         <div>
@@ -182,24 +317,42 @@ function App() {
       </section>
 
       <section className="panel">
-        <h2>账号库</h2>
+        <div className="panel-title-row">
+          <div>
+            <h2>账号库</h2>
+            <p className="muted">默认只展示未删除账号。删除为软删除，不会返回 access_token / refresh_token / auth_raw。</p>
+          </div>
+          <label className="inline-toggle">
+            <input type="checkbox" checked={showDeleted} onChange={(event) => setShowDeleted(event.target.checked)} />
+            显示已删除
+          </label>
+        </div>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>ID</th><th>Account</th><th>DeviceID</th><th>状态</th><th>失败</th><th>过期时间</th><th>原因</th><th>操作</th></tr></thead>
+            <thead><tr><th scope="col">ID</th><th scope="col">Account</th><th scope="col">DeviceID</th><th scope="col">状态</th><th scope="col">失败</th><th scope="col">过期时间</th><th scope="col">原因</th><th scope="col">操作</th></tr></thead>
             <tbody>
+              {accounts.items?.length === 0 && <tr><td colSpan="8" className="empty-cell">暂无账号。请先导入 auth.json。</td></tr>}
               {accounts.items?.map((account) => (
-                <tr key={account.id}>
+                <tr key={account.id} className={account.deleted_at ? 'deleted-row' : ''}>
                   <td>{account.id}</td>
                   <td>{account.account_id}</td>
-                  <td className="mono">{account.device_id}</td>
-                  <td><StatusBadge value={account.status} /></td>
+                  <td className="mono wrap-cell">{account.device_id}</td>
+                  <td><StatusBadge value={account.deleted_at ? 'deleted' : account.status} /></td>
                   <td>{account.failure_count}</td>
                   <td>{account.expires_at || '-'}</td>
-                  <td>{account.status_reason || '-'}</td>
-                  <td className="actions">
-                    {['normal', 'limited', 'banned', 'expired', 'disabled'].map((status) => (
-                      <button key={status} className="mini" onClick={() => updateStatus(account.id, status)}>{status}</button>
-                    ))}
+                  <td className="reason-cell">{account.deleted_reason || account.status_reason || '-'}</td>
+                  <td className="actions action-bar">
+                    {account.deleted_at ? (
+                      <button type="button" className="mini" onClick={() => restoreAccount(account.id)}>恢复</button>
+                    ) : (
+                      <>
+                        <button type="button" className="mini" onClick={() => setEditingAccount({ ...account })}><Edit3 size={13} />编辑</button>
+                        <select className="mini-select" value={account.status} onChange={(event) => updateStatus(account.id, event.target.value)} aria-label={`设置账号 ${account.id} 状态`}>
+                          {ACCOUNT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                        </select>
+                        <button type="button" className="mini danger-button" onClick={() => setDeleteTarget(account)}><Trash2 size={13} />删除</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -211,14 +364,14 @@ function App() {
       <section className="panel">
         <h2>对外 API Key 管理</h2>
         <form className="api-key-form" onSubmit={createApiKey}>
-          <input value={apiKeyForm.name} onChange={(e) => setApiKeyForm({ ...apiKeyForm, name: e.target.value })} placeholder="Key 名称，例如 cursor-client" />
-          <input type="number" value={apiKeyForm.rate_limit_per_minute} onChange={(e) => setApiKeyForm({ ...apiKeyForm, rate_limit_per_minute: e.target.value })} placeholder="每分钟限流" />
-          <input value={apiKeyForm.model_scopes} onChange={(e) => setApiKeyForm({ ...apiKeyForm, model_scopes: e.target.value })} placeholder="模型范围，逗号分隔" />
+          <input value={apiKeyForm.name} onChange={(event) => setApiKeyForm({ ...apiKeyForm, name: event.target.value })} placeholder="Key 名称，例如 cursor-client" />
+          <input type="number" value={apiKeyForm.rate_limit_per_minute} onChange={(event) => setApiKeyForm({ ...apiKeyForm, rate_limit_per_minute: event.target.value })} placeholder="每分钟限流" />
+          <input value={apiKeyForm.model_scopes} onChange={(event) => setApiKeyForm({ ...apiKeyForm, model_scopes: event.target.value })} placeholder="模型范围，逗号分隔" />
           <button>创建 API Key</button>
         </form>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>ID</th><th>名称</th><th>Key 预览</th><th>状态</th><th>限流/分钟</th><th>模型权限</th><th>最后使用</th><th>操作</th></tr></thead>
+            <thead><tr><th scope="col">ID</th><th scope="col">名称</th><th scope="col">Key 预览</th><th scope="col">状态</th><th scope="col">限流/分钟</th><th scope="col">模型权限</th><th scope="col">最后使用</th><th scope="col">操作</th></tr></thead>
             <tbody>
               {apiKeys.items?.map((item) => (
                 <tr key={item.id}>
@@ -230,9 +383,9 @@ function App() {
                   <td>{item.model_scopes?.join(', ') || '全部'}</td>
                   <td>{item.last_used_at || '-'}</td>
                   <td className="actions">
-                    <button className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
-                    <button className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
-                    <button className="mini danger-button" onClick={() => deleteApiKey(item.id)}>删除</button>
+                    <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
+                    <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
+                    <button type="button" className="mini danger-button" onClick={() => deleteApiKey(item.id)}>删除</button>
                   </td>
                 </tr>
               ))}
@@ -245,13 +398,13 @@ function App() {
         <div className="panel">
           <h2>调研情况</h2>
           <form className="compact-form" onSubmit={createNote}>
-            <input value={noteForm.title} onChange={(e) => setNoteForm({ ...noteForm, title: e.target.value })} placeholder="标题" />
-            <select value={noteForm.status} onChange={(e) => setNoteForm({ ...noteForm, status: e.target.value })}>
+            <input value={noteForm.title} onChange={(event) => setNoteForm({ ...noteForm, title: event.target.value })} placeholder="标题" />
+            <select value={noteForm.status} onChange={(event) => setNoteForm({ ...noteForm, status: event.target.value })}>
               <option value="pending">pending</option>
               <option value="done">done</option>
               <option value="blocked">blocked</option>
             </select>
-            <textarea value={noteForm.content} onChange={(e) => setNoteForm({ ...noteForm, content: e.target.value })} placeholder="调研内容 / 结论 / 待验证点" />
+            <textarea value={noteForm.content} onChange={(event) => setNoteForm({ ...noteForm, content: event.target.value })} placeholder="调研内容 / 结论 / 待验证点" />
             <button>保存调研记录</button>
           </form>
           <div className="list">
@@ -262,17 +415,17 @@ function App() {
         <div className="panel">
           <h2>异常情况</h2>
           <form className="compact-form" onSubmit={createException}>
-            <select value={exceptionForm.account_id} onChange={(e) => setExceptionForm({ ...exceptionForm, account_id: e.target.value })}>
+            <select value={exceptionForm.account_id} onChange={(event) => setExceptionForm({ ...exceptionForm, account_id: event.target.value })}>
               <option value="">不绑定账号</option>
               {accountOptions.map((account) => <option value={account.id} key={account.id}>#{account.id} {account.device_id}</option>)}
             </select>
-            <select value={exceptionForm.level} onChange={(e) => setExceptionForm({ ...exceptionForm, level: e.target.value })}>
+            <select value={exceptionForm.level} onChange={(event) => setExceptionForm({ ...exceptionForm, level: event.target.value })}>
               <option value="info">info</option>
               <option value="warning">warning</option>
               <option value="error">error</option>
             </select>
-            <input value={exceptionForm.message} onChange={(e) => setExceptionForm({ ...exceptionForm, message: e.target.value })} placeholder="异常摘要，例如 429 quota" />
-            <textarea value={exceptionForm.detail} onChange={(e) => setExceptionForm({ ...exceptionForm, detail: e.target.value })} placeholder="详细情况" />
+            <input value={exceptionForm.message} onChange={(event) => setExceptionForm({ ...exceptionForm, message: event.target.value })} placeholder="异常摘要，例如 429 quota" />
+            <textarea value={exceptionForm.detail} onChange={(event) => setExceptionForm({ ...exceptionForm, detail: event.target.value })} placeholder="详细情况" />
             <button>保存异常记录</button>
           </form>
           <div className="list">
@@ -280,6 +433,9 @@ function App() {
           </div>
         </div>
       </section>
+
+      <AccountEditDialog account={editingAccount} onChange={setEditingAccount} onClose={() => setEditingAccount(null)} onSave={saveEditingAccount} pending={pendingAction} />
+      <ConfirmDialog account={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={deleteAccount} pending={pendingAction} />
     </main>
   );
 }

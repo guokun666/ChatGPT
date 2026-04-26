@@ -20,6 +20,14 @@ class UpdateAccountStatusRequest(BaseModel):
     reason: str = ""
 
 
+class AccountUpdate(BaseModel):
+    account_id: str | None = None
+    device_id: str | None = None
+    expires_at: str | None = None
+    status: AccountStatus | None = None
+    status_reason: str | None = None
+
+
 class ResearchNoteCreate(BaseModel):
     title: str = Field(min_length=1)
     status: NoteStatus = "pending"

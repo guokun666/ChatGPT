@@ -48,6 +48,8 @@ class Database:
                     status_reason TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
+                    deleted_at TEXT,
+                    deleted_reason TEXT,
                     UNIQUE(device_id)
                 );
 
@@ -84,6 +86,14 @@ class Database:
                 );
                 """,
             )
+            self._ensure_column(conn, "accounts", "deleted_at", "TEXT")
+            self._ensure_column(conn, "accounts", "deleted_reason", "TEXT")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def row_to_account(row: sqlite3.Row) -> dict[str, Any]:
@@ -99,6 +109,8 @@ def row_to_account(row: sqlite3.Row) -> dict[str, Any]:
         "status_reason": row["status_reason"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "deleted_at": row["deleted_at"],
+        "deleted_reason": row["deleted_reason"],
     }
 
 

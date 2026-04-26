@@ -89,6 +89,52 @@ def test_update_account_status_and_record_exception(tmp_path):
     assert exceptions[0]["message"] == "429 quota"
 
 
+def test_account_can_be_edited_without_exposing_secrets(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+
+    response = client.patch(
+        f"/api/accounts/{created['id']}",
+        json={
+            "account_id": "acct-edited",
+            "device_id": "dev-edited",
+            "expires_at": "2099-02-01T00:00:00+00:00",
+            "status": "disabled",
+            "status_reason": "manual maintenance",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "acct-edited"
+    assert body["device_id"] == "dev-edited"
+    assert body["expires_at"] == "2099-02-01T00:00:00+00:00"
+    assert body["status"] == "disabled"
+    assert body["status_reason"] == "manual maintenance"
+    assert "access_token" not in body
+    assert "refresh_token" not in body
+    assert "auth_raw" not in body
+
+
+def test_account_delete_hides_from_default_list_and_can_be_restored(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+
+    deleted = client.delete(f"/api/accounts/{created['id']}")
+
+    assert deleted.status_code == 204
+    assert client.get("/api/accounts").json()["items"] == []
+    with_deleted = client.get("/api/accounts?include_deleted=true").json()["items"]
+    assert len(with_deleted) == 1
+    assert with_deleted[0]["deleted_at"] is not None
+    assert with_deleted[0]["deleted_reason"] == "manual delete"
+
+    restored = client.post(f"/api/accounts/{created['id']}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["deleted_at"] is None
+    assert client.get("/api/accounts").json()["items"][0]["id"] == created["id"]
+
+
 def test_research_notes_can_be_recorded_and_listed(tmp_path):
     client = make_client(tmp_path)
 
