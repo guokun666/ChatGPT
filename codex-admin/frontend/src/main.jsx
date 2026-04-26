@@ -144,7 +144,7 @@ function App() {
   const [authText, setAuthText] = useState('');
   const [noteForm, setNoteForm] = useState({ title: '', status: 'pending', content: '' });
   const [exceptionForm, setExceptionForm] = useState({ account_id: '', level: 'warning', message: '', detail: '' });
-  const [apiKeyForm, setApiKeyForm] = useState({ name: '', rate_limit_per_minute: 60, model_scopes: 'codex-code,code-mini' });
+  const [apiKeyForm, setApiKeyForm] = useState({ name: '', rate_limit_per_minute: 60, model_scopes: '' });
   const [message, setMessage] = useState('');
   const [showDeleted, setShowDeleted] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
@@ -300,7 +300,7 @@ function App() {
         model_scopes: scopes,
       }),
     });
-    setApiKeyForm({ name: '', rate_limit_per_minute: 60, model_scopes: 'codex-code,code-mini' });
+    setApiKeyForm({ name: '', rate_limit_per_minute: 60, model_scopes: '' });
     setMessage(`API Key 已创建，只显示一次：${created.key}`);
     await loadAll();
   }
@@ -308,6 +308,12 @@ function App() {
   async function updateApiKeyStatus(apiKeyId, status) {
     await api(`/api/api-keys/${apiKeyId}`, { method: 'PATCH', body: JSON.stringify({ status }) });
     setMessage(`API Key ${apiKeyId} 已设置为 ${status}`);
+    await loadAll();
+  }
+
+  async function updateApiKeyModelScopes(apiKeyId, modelScopes, label) {
+    await api(`/api/api-keys/${apiKeyId}`, { method: 'PATCH', body: JSON.stringify({ model_scopes: modelScopes }) });
+    setMessage(`API Key ${apiKeyId} 模型权限已更新：${label}`);
     await loadAll();
   }
 
@@ -359,8 +365,24 @@ function App() {
     setValidationOptions((options) => ({ ...options, [key]: next }));
   }
 
+  function modelsForTarget(targetType, id) {
+    if (targetType !== 'api_key') return modelCatalog.models;
+    const apiKey = apiKeys.items?.find((item) => item.id === id);
+    const scopes = apiKey?.model_scopes || [];
+    if (!scopes.length) return modelCatalog.models;
+    return modelCatalog.models.filter((model) => scopes.includes(model.id));
+  }
+
   function validationOptionValue(targetType, id, field) {
-    return validationOptions[`${targetType}:${id}`]?.[field] || (field === 'model' ? modelCatalog.default_model || 'gpt-5.4' : modelCatalog.default_reasoning_effort || 'low');
+    const key = `${targetType}:${id}`;
+    if (field !== 'model') {
+      return validationOptions[key]?.[field] || modelCatalog.default_reasoning_effort || 'low';
+    }
+    const availableModels = modelsForTarget(targetType, id);
+    const savedModel = validationOptions[key]?.model;
+    if (savedModel && availableModels.some((model) => model.id === savedModel)) return savedModel;
+    if (availableModels.some((model) => model.id === modelCatalog.default_model)) return modelCatalog.default_model;
+    return availableModels[0]?.id || modelCatalog.default_model || 'gpt-5.4';
   }
 
   function reasoningEffortsFor(targetType, id) {
@@ -471,10 +493,11 @@ function App() {
 
       <section className="panel">
         <h2>对外 API Key 管理</h2>
+        <p className="muted">模型列表来源：{modelCatalog.source || 'fallback'}{modelCatalog.fetched_at ? ` · 抓取时间：${modelCatalog.fetched_at}` : ''}{modelCatalog.client_version ? ` · Codex CLI：${modelCatalog.client_version}` : ''}</p>
         <form className="api-key-form" onSubmit={createApiKey}>
           <input value={apiKeyForm.name} onChange={(event) => setApiKeyForm({ ...apiKeyForm, name: event.target.value })} placeholder="Key 名称，例如 cursor-client" />
           <input type="number" value={apiKeyForm.rate_limit_per_minute} onChange={(event) => setApiKeyForm({ ...apiKeyForm, rate_limit_per_minute: event.target.value })} placeholder="每分钟限流" />
-          <input value={apiKeyForm.model_scopes} onChange={(event) => setApiKeyForm({ ...apiKeyForm, model_scopes: event.target.value })} placeholder="模型范围，逗号分隔" />
+          <input value={apiKeyForm.model_scopes} onChange={(event) => setApiKeyForm({ ...apiKeyForm, model_scopes: event.target.value })} placeholder="模型范围，逗号分隔；留空=允许全部当前/未来模型" />
           <button>创建 API Key</button>
         </form>
         <div className="table-wrap">
@@ -499,12 +522,14 @@ function App() {
                       aria-label={`API Key ${item.id} 验证输入`}
                     />
                     <select className="validation-select" value={validationOptionValue('api_key', item.id, 'model')} onChange={(event) => updateValidationOption('api_key', item.id, 'model', event.target.value)} aria-label={`API Key ${item.id} 验证模型`}>
-                      {modelCatalog.models.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
+                      {modelsForTarget('api_key', item.id).map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
                     </select>
                     <select className="validation-select" value={validationOptionValue('api_key', item.id, 'reasoning_effort')} onChange={(event) => updateValidationOption('api_key', item.id, 'reasoning_effort', event.target.value)} aria-label={`API Key ${item.id} 思考复杂度`}>
                       {reasoningEffortsFor('api_key', item.id).map((effort) => <option key={effort} value={effort}>{effort}</option>)}
                     </select>
                     <button type="button" className="mini" onClick={() => runValidation('api_key', item.id)} disabled={validationResults[`api_key:${item.id}`]?.loading}><MessageCircle size={13} />验证</button>
+                    <button type="button" className="mini" onClick={() => updateApiKeyModelScopes(item.id, [], '允许全部模型')}>允许全部模型</button>
+                    <button type="button" className="mini" onClick={() => updateApiKeyModelScopes(item.id, modelCatalog.models.map((model) => model.id), '已同步当前模型列表')}>同步当前模型</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
                     <button type="button" className="mini danger-button" onClick={() => deleteApiKey(item.id)}>删除</button>

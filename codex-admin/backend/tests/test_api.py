@@ -51,6 +51,8 @@ def test_models_endpoint_reads_codex_model_cache(tmp_path, monkeypatch):
     assert "hidden-model" not in [item["id"] for item in body["models"]]
     assert body["default_model"] == "gpt-5.5"
     assert body["default_reasoning_effort"] == "low"
+    assert body["source"] == str(cache_path)
+    assert body["fetched_at"] is None
 
 
 def test_import_auth_json_creates_account_without_exposing_tokens(tmp_path):
@@ -355,17 +357,37 @@ def test_api_key_validation_rejects_disabled_key(tmp_path):
     assert "not active" in response.json()["detail"]
 
 
-def test_api_key_validation_rejects_model_outside_scope(tmp_path):
+def test_api_key_validation_rejects_model_outside_scope_with_clear_allowed_scopes(tmp_path):
     client = make_client(tmp_path)
     created = client.post(
         "/api/api-keys",
         json={"name": "client-a", "status": "active", "model_scopes": ["code-mini"]},
     ).json()
 
-    response = client.post(f"/api/api-keys/{created['id']}/test", json={"model": "codex-code"})
+    response = client.post(f"/api/api-keys/{created['id']}/test", json={"model": "gpt-5.4-mini"})
 
     assert response.status_code == 400
-    assert "not allowed" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "API key does not allow model gpt-5.4-mini" in detail
+    assert "allowed scopes: code-mini" in detail
+    assert "edit this API key" in detail
+
+
+def test_api_key_model_scopes_can_be_updated_to_dynamic_model(tmp_path):
+    client = make_client(tmp_path)
+    client.post("/api/accounts/import", json={"auth_json": sample_auth()})
+    created = client.post(
+        "/api/api-keys",
+        json={"name": "client-a", "status": "active", "model_scopes": ["code-mini"]},
+    ).json()
+
+    updated = client.patch(f"/api/api-keys/{created['id']}", json={"model_scopes": ["gpt-5.4-mini"]})
+    response = client.post(f"/api/api-keys/{created['id']}/test", json={"model": "gpt-5.4-mini"})
+
+    assert updated.status_code == 200
+    assert updated.json()["model_scopes"] == ["gpt-5.4-mini"]
+    assert response.status_code == 200
+    assert response.json()["requested_model"] == "gpt-5.4-mini"
 
 
 def test_dashboard_summary_combines_accounts_notes_exceptions_and_api_keys(tmp_path):

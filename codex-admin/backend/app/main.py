@@ -95,6 +95,8 @@ def load_codex_models() -> dict[str, Any]:
             raise ValueError("no list-visible models found")
         return {
             "source": source,
+            "fetched_at": data.get("fetched_at"),
+            "client_version": data.get("client_version"),
             "models": models,
             "default_model": models[0]["id"],
             "default_reasoning_effort": models[0].get("default_reasoning_effort") or models[0]["reasoning_efforts"][0],
@@ -515,7 +517,14 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
                 raise HTTPException(status_code=400, detail=f"api key is not active: {row['status']}")
             scopes = json_loads_list(row["model_scopes"])
             if scopes and payload.model not in scopes:
-                raise HTTPException(status_code=400, detail=f"model {payload.model} is not allowed by this api key")
+                allowed = ", ".join(scopes)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"API key does not allow model {payload.model}; "
+                        f"allowed scopes: {allowed}. Please edit this API key model scopes or set scopes empty to allow all models."
+                    ),
+                )
             account = conn.execute(
                 "SELECT * FROM accounts WHERE deleted_at IS NULL AND status = 'normal' ORDER BY updated_at DESC, id DESC LIMIT 1"
             ).fetchone()
