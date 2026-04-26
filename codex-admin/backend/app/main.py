@@ -17,6 +17,7 @@ from .schemas import (
     ImportAuthRequest,
     ResearchNoteCreate,
     UpdateAccountStatusRequest,
+    ValidationChatRequest,
 )
 from .storage import (
     Database,
@@ -39,6 +40,26 @@ DEFAULT_DB_PATH = os.getenv(
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def json_loads_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    parsed = json.loads(value)
+    return parsed if isinstance(parsed, list) else []
+
+
+def simulated_chat_validation(target_type: str, target_id: int, prompt: str, model: str, detail: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "target_type": target_type,
+        "target_id": target_id,
+        "model": model,
+        "prompt": prompt,
+        "assistant_message": f"你好，我收到了你的验证消息：{prompt}。当前为 Codex Admin 本地验证响应，真实 Codex 协议调用接入后这里会返回上游模型结果。",
+        "validation_mode": "local-simulated-chat",
+        "detail": detail,
+    }
 
 
 def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
@@ -223,6 +244,24 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
             updated = cursor.fetchone()
         return row_to_account(updated)
 
+    @app.post("/api/accounts/{account_id}/test")
+    def test_account_auth(account_id: int, payload: ValidationChatRequest) -> dict[str, Any]:
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="account not found")
+            if row["deleted_at"] is not None:
+                raise HTTPException(status_code=400, detail="account is deleted")
+            if row["status"] != "normal":
+                raise HTTPException(status_code=400, detail=f"account is not normal: {row['status']}")
+        return simulated_chat_validation(
+            "account",
+            account_id,
+            payload.prompt,
+            payload.model,
+            {"account_id": row["account_id"], "device_id": row["device_id"], "status": row["status"]},
+        )
+
     @app.post("/api/research-notes", status_code=201)
     def create_research_note(payload: ResearchNoteCreate) -> dict[str, Any]:
         now = utc_now()
@@ -331,6 +370,27 @@ def create_app(db_path: str = DEFAULT_DB_PATH) -> FastAPI:
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="api key not found")
         return None
+
+    @app.post("/api/api-keys/{api_key_id}/test")
+    def test_api_key(api_key_id: int, payload: ValidationChatRequest) -> dict[str, Any]:
+        now = utc_now()
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM api_keys WHERE id = ?", (api_key_id,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="api key not found")
+            if row["status"] != "active":
+                raise HTTPException(status_code=400, detail=f"api key is not active: {row['status']}")
+            scopes = json_loads_list(row["model_scopes"])
+            if scopes and payload.model not in scopes:
+                raise HTTPException(status_code=400, detail=f"model {payload.model} is not allowed by this api key")
+            conn.execute("UPDATE api_keys SET last_used_at = ?, updated_at = ? WHERE id = ?", (now, now, api_key_id))
+        return simulated_chat_validation(
+            "api_key",
+            api_key_id,
+            payload.prompt,
+            payload.model,
+            {"name": row["name"], "key_preview": row["key_preview"], "model_scopes": scopes},
+        )
 
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:

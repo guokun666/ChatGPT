@@ -54,3 +54,8 @@ class ApiKeyUpdate(BaseModel):
     status: ApiKeyStatus | None = None
     rate_limit_per_minute: int | None = None
     model_scopes: list[str] | None = None
+
+
+class ValidationChatRequest(BaseModel):
+    prompt: str = "你好。"
+    model: str = "codex-code"

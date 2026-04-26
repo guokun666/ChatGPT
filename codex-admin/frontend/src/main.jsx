@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, Database, Edit3, FileText, KeyRound, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Database, Edit3, FileText, KeyRound, MessageCircle, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
 import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
@@ -113,6 +113,21 @@ function ConfirmDialog({ account, onCancel, onConfirm, pending }) {
   );
 }
 
+function ValidationResult({ result }) {
+  if (!result) return null;
+  if (result.error) {
+    return <div className="validation-result validation-error" role="alert">验证失败：{result.error}</div>;
+  }
+  return (
+    <div className="validation-result" role="status">
+      <div><StatusBadge value={result.ok ? 'normal' : 'error'} /> <span className="mono">{result.validation_mode}</span></div>
+      <p><strong>用户：</strong>{result.prompt}</p>
+      <p><strong>助手：</strong>{result.assistant_message}</p>
+      <small>模型：{result.model} · 目标：{result.target_type} #{result.target_id}</small>
+    </div>
+  );
+}
+
 function App() {
   const [accounts, setAccounts] = useState({ summary: {}, items: [] });
   const [dashboard, setDashboard] = useState({ accounts: {}, research_notes: {}, exceptions: {}, api_keys: {} });
@@ -128,6 +143,7 @@ function App() {
   const [editingAccount, setEditingAccount] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [pendingAction, setPendingAction] = useState(false);
+  const [validationResults, setValidationResults] = useState({});
 
   async function loadAll(includeDeleted = showDeleted) {
     const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
@@ -290,6 +306,21 @@ function App() {
     await loadAll();
   }
 
+  async function runValidation(targetType, id) {
+    const key = `${targetType}:${id}`;
+    setValidationResults((current) => ({ ...current, [key]: { loading: true } }));
+    try {
+      const path = targetType === 'account' ? `/api/accounts/${id}/test` : `/api/api-keys/${id}/test`;
+      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt: '你好。' }) });
+      setValidationResults((current) => ({ ...current, [key]: result }));
+      setMessage(`${targetType === 'account' ? 'Auth 账号' : 'API Key'} ${id} 验证通过`);
+      await loadAll();
+    } catch (error) {
+      setValidationResults((current) => ({ ...current, [key]: { error: error.message } }));
+      setMessage(`${targetType === 'account' ? 'Auth 账号' : 'API Key'} ${id} 验证失败：${error.message}`);
+    }
+  }
+
   const accountOptions = useMemo(() => accounts.items?.filter((account) => !account.deleted_at) || [], [accounts]);
 
   return (
@@ -362,11 +393,13 @@ function App() {
                       <button type="button" className="mini" onClick={() => restoreAccount(account.id)}>恢复</button>
                     ) : (
                       <>
+                        <button type="button" className="mini" onClick={() => runValidation('account', account.id)} disabled={validationResults[`account:${account.id}`]?.loading}><MessageCircle size={13} />验证</button>
                         <button type="button" className="mini" onClick={() => setEditingAccount({ ...account })}><Edit3 size={13} />编辑</button>
                         <select className="mini-select" value={account.status} onChange={(event) => updateStatus(account.id, event.target.value)} aria-label={`设置账号 ${account.id} 状态`}>
                           {ACCOUNT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
                         </select>
                         <button type="button" className="mini danger-button" onClick={() => setDeleteTarget(account)}><Trash2 size={13} />删除</button>
+                        <ValidationResult result={validationResults[`account:${account.id}`]} />
                       </>
                     )}
                   </td>
@@ -399,9 +432,11 @@ function App() {
                   <td>{item.model_scopes?.join(', ') || '全部'}</td>
                   <td>{item.last_used_at || '-'}</td>
                   <td className="actions">
+                    <button type="button" className="mini" onClick={() => runValidation('api_key', item.id)} disabled={validationResults[`api_key:${item.id}`]?.loading}><MessageCircle size={13} />验证</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'disabled')}>禁用</button>
                     <button type="button" className="mini danger-button" onClick={() => deleteApiKey(item.id)}>删除</button>
+                    <ValidationResult result={validationResults[`api_key:${item.id}`]} />
                   </td>
                 </tr>
               ))}

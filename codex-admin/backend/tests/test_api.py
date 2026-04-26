@@ -161,6 +161,34 @@ def test_account_edit_rejects_invalid_auth_json(tmp_path):
     assert "missing access_token" in response.json()["detail"]
 
 
+def test_account_auth_can_run_default_validation_chat(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+
+    response = client.post(f"/api/accounts/{created['id']}/test", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_type"] == "account"
+    assert body["target_id"] == created["id"]
+    assert body["prompt"] == "你好。"
+    assert body["ok"] is True
+    assert "你好" in body["assistant_message"]
+    assert "access_token" not in str(body)
+    assert "refresh_token" not in str(body)
+
+
+def test_account_auth_validation_rejects_unhealthy_account(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
+    client.patch(f"/api/accounts/{created['id']}/status", json={"status": "expired", "reason": "manual expired"})
+
+    response = client.post(f"/api/accounts/{created['id']}/test", json={"prompt": "你好。"})
+
+    assert response.status_code == 400
+    assert "not normal" in response.json()["detail"]
+
+
 def test_account_delete_hides_from_default_list_and_can_be_restored(tmp_path):
     client = make_client(tmp_path)
     created = client.post("/api/accounts/import", json={"auth_json": sample_auth()}).json()
@@ -223,6 +251,48 @@ def test_api_keys_can_be_created_listed_disabled_and_deleted(tmp_path):
     assert deleted.status_code == 204
     assert client.get("/api/api-keys").json()["items"] == []
 
+
+def test_api_key_can_run_default_validation_chat(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/api-keys",
+        json={"name": "client-a", "status": "active", "rate_limit_per_minute": 60, "model_scopes": ["codex-code"]},
+    ).json()
+
+    response = client.post(f"/api/api-keys/{created['id']}/test", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["target_type"] == "api_key"
+    assert body["target_id"] == created["id"]
+    assert body["prompt"] == "你好。"
+    assert body["model"] == "codex-code"
+    assert body["ok"] is True
+    assert "你好" in body["assistant_message"]
+    assert created["key"] not in str(body)
+
+
+def test_api_key_validation_rejects_disabled_key(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post("/api/api-keys", json={"name": "client-a", "status": "disabled"}).json()
+
+    response = client.post(f"/api/api-keys/{created['id']}/test", json={"prompt": "你好。"})
+
+    assert response.status_code == 400
+    assert "not active" in response.json()["detail"]
+
+
+def test_api_key_validation_rejects_model_outside_scope(tmp_path):
+    client = make_client(tmp_path)
+    created = client.post(
+        "/api/api-keys",
+        json={"name": "client-a", "status": "active", "model_scopes": ["code-mini"]},
+    ).json()
+
+    response = client.post(f"/api/api-keys/{created['id']}/test", json={"model": "codex-code"})
+
+    assert response.status_code == 400
+    assert "not allowed" in response.json()["detail"]
 
 
 def test_dashboard_summary_combines_accounts_notes_exceptions_and_api_keys(tmp_path):
