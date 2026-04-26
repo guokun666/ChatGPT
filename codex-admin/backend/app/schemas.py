@@ -9,7 +9,7 @@ AccountStatus = Literal["normal", "limited", "banned", "expired", "disabled"]
 NoteStatus = Literal["pending", "done", "blocked"]
 ExceptionLevel = Literal["info", "warning", "error"]
 ApiKeyStatus = Literal["active", "disabled"]
-ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh"]
 
 
 class ImportAuthRequest(BaseModel):

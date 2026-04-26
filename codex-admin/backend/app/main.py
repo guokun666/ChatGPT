@@ -52,6 +52,64 @@ def json_loads_list(value: str | None) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
+def codex_models_cache_path() -> Path:
+    configured = os.getenv("CODEX_ADMIN_MODELS_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+    codex_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    return codex_home / "models_cache.json"
+
+
+def fallback_models() -> list[dict[str, Any]]:
+    return [
+        {"id": "gpt-5.4", "label": "gpt-5.4", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
+        {"id": "gpt-5.4-mini", "label": "GPT-5.4-Mini", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
+        {"id": "gpt-5.3-codex", "label": "gpt-5.3-codex", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
+        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3-Codex-Spark", "reasoning_efforts": ["low", "medium", "high", "xhigh"]},
+    ]
+
+
+def load_codex_models() -> dict[str, Any]:
+    path = codex_models_cache_path()
+    source = str(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        models = []
+        for item in data.get("models", []):
+            if item.get("visibility") == "hide":
+                continue
+            model_id = item.get("slug")
+            if not model_id:
+                continue
+            efforts = [level.get("effort") for level in item.get("supported_reasoning_levels") or [] if level.get("effort")]
+            models.append(
+                {
+                    "id": model_id,
+                    "label": item.get("display_name") or model_id,
+                    "description": item.get("description") or "",
+                    "reasoning_efforts": efforts or ["low", "medium", "high"],
+                    "default_reasoning_effort": item.get("default_reasoning_level") or (efforts[0] if efforts else "low"),
+                }
+            )
+        if not models:
+            raise ValueError("no list-visible models found")
+        return {
+            "source": source,
+            "models": models,
+            "default_model": models[0]["id"],
+            "default_reasoning_effort": models[0].get("default_reasoning_effort") or models[0]["reasoning_efforts"][0],
+        }
+    except Exception as exc:
+        models = fallback_models()
+        return {
+            "source": "fallback",
+            "error": str(exc),
+            "models": models,
+            "default_model": models[0]["id"],
+            "default_reasoning_effort": models[0]["reasoning_efforts"][0],
+        }
+
+
 def resolve_cli_model(requested_model: str) -> str:
     configured = os.getenv("CODEX_ADMIN_CODEX_MODEL")
     if configured:
@@ -145,6 +203,10 @@ def create_app(db_path: str = DEFAULT_DB_PATH, validation_runner: ValidationRunn
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/models")
+    def list_models() -> dict[str, Any]:
+        return load_codex_models()
 
     @app.post("/api/accounts/import", status_code=201)
     def import_account(payload: ImportAuthRequest) -> dict[str, Any]:

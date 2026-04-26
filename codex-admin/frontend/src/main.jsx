@@ -5,8 +5,12 @@ import './styles.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 const ACCOUNT_STATUSES = ['normal', 'limited', 'banned', 'expired', 'disabled'];
-const VALIDATION_MODELS = ['codex-code', 'code-mini', 'gpt-5.4', 'gpt-5.4-codex', 'gpt-4o-codex'];
-const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'];
+const FALLBACK_VALIDATION_MODELS = [
+  { id: 'gpt-5.4', label: 'gpt-5.4', reasoning_efforts: ['low', 'medium', 'high', 'xhigh'] },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', reasoning_efforts: ['low', 'medium', 'high', 'xhigh'] },
+  { id: 'gpt-5.3-codex', label: 'gpt-5.3-codex', reasoning_efforts: ['low', 'medium', 'high', 'xhigh'] },
+  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', reasoning_efforts: ['low', 'medium', 'high', 'xhigh'] },
+];
 
 async function api(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -136,6 +140,7 @@ function App() {
   const [notes, setNotes] = useState([]);
   const [exceptions, setExceptions] = useState([]);
   const [apiKeys, setApiKeys] = useState({ summary: {}, items: [] });
+  const [modelCatalog, setModelCatalog] = useState({ models: FALLBACK_VALIDATION_MODELS, default_model: 'gpt-5.4', default_reasoning_effort: 'low', source: 'fallback' });
   const [authText, setAuthText] = useState('');
   const [noteForm, setNoteForm] = useState({ title: '', status: 'pending', content: '' });
   const [exceptionForm, setExceptionForm] = useState({ account_id: '', level: 'warning', message: '', detail: '' });
@@ -150,18 +155,20 @@ function App() {
   const [validationOptions, setValidationOptions] = useState({});
 
   async function loadAll(includeDeleted = showDeleted) {
-    const [accountData, dashboardData, noteData, exceptionData, apiKeyData] = await Promise.all([
+    const [accountData, dashboardData, noteData, exceptionData, apiKeyData, modelData] = await Promise.all([
       api(`/api/accounts?include_deleted=${includeDeleted ? 'true' : 'false'}`),
       api('/api/dashboard'),
       api('/api/research-notes'),
       api('/api/exceptions'),
       api('/api/api-keys'),
+      api('/api/models'),
     ]);
     setAccounts(accountData);
     setDashboard(dashboardData);
     setNotes(noteData.items || []);
     setExceptions(exceptionData.items || []);
     setApiKeys(apiKeyData);
+    setModelCatalog(modelData?.models?.length ? modelData : { models: FALLBACK_VALIDATION_MODELS, default_model: 'gpt-5.4', default_reasoning_effort: 'low', source: 'fallback' });
   }
 
   useEffect(() => {
@@ -313,11 +320,11 @@ function App() {
   async function runValidation(targetType, id) {
     const key = `${targetType}:${id}`;
     const prompt = validationPrompts[key]?.trim() || '你好。';
-    const options = validationOptions[key] || { model: 'codex-code', reasoning_effort: 'low' };
+    const options = validationOptions[key] || { model: modelCatalog.default_model || 'gpt-5.4', reasoning_effort: modelCatalog.default_reasoning_effort || 'low' };
     setValidationResults((current) => ({ ...current, [key]: { loading: true } }));
     try {
       const path = targetType === 'account' ? `/api/accounts/${id}/test` : `/api/api-keys/${id}/test`;
-      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt, model: options.model || 'codex-code', reasoning_effort: options.reasoning_effort || 'low' }) });
+      const result = await api(path, { method: 'POST', body: JSON.stringify({ prompt, model: options.model || modelCatalog.default_model || 'gpt-5.4', reasoning_effort: options.reasoning_effort || modelCatalog.default_reasoning_effort || 'low' }) });
       setValidationResults((current) => ({ ...current, [key]: result }));
       setMessage(`${targetType === 'account' ? 'Auth 账号' : 'API Key'} ${id} 验证通过`);
       await loadAll();
@@ -340,14 +347,26 @@ function App() {
 
   function updateValidationOption(targetType, id, field, value) {
     const key = `${targetType}:${id}`;
-    setValidationOptions((current) => ({
-      ...current,
-      [key]: { model: 'codex-code', reasoning_effort: 'low', ...(current[key] || {}), [field]: value },
-    }));
+    const current = validationOptions[key] || {};
+    const next = { model: modelCatalog.default_model || 'gpt-5.4', reasoning_effort: modelCatalog.default_reasoning_effort || 'low', ...current, [field]: value };
+    if (field === 'model') {
+      const model = modelCatalog.models.find((item) => item.id === value);
+      const efforts = model?.reasoning_efforts || ['low', 'medium', 'high'];
+      if (!efforts.includes(next.reasoning_effort)) {
+        next.reasoning_effort = model?.default_reasoning_effort || efforts[0] || 'low';
+      }
+    }
+    setValidationOptions((options) => ({ ...options, [key]: next }));
   }
 
   function validationOptionValue(targetType, id, field) {
-    return validationOptions[`${targetType}:${id}`]?.[field] || (field === 'model' ? 'codex-code' : 'low');
+    return validationOptions[`${targetType}:${id}`]?.[field] || (field === 'model' ? modelCatalog.default_model || 'gpt-5.4' : modelCatalog.default_reasoning_effort || 'low');
+  }
+
+  function reasoningEffortsFor(targetType, id) {
+    const modelId = validationOptionValue(targetType, id, 'model');
+    const model = modelCatalog.models.find((item) => item.id === modelId);
+    return model?.reasoning_efforts?.length ? model.reasoning_efforts : ['low', 'medium', 'high'];
   }
 
   return (
@@ -428,10 +447,10 @@ function App() {
                           aria-label={`账号 ${account.id} 验证输入`}
                         />
                         <select className="validation-select" value={validationOptionValue('account', account.id, 'model')} onChange={(event) => updateValidationOption('account', account.id, 'model', event.target.value)} aria-label={`账号 ${account.id} 验证模型`}>
-                          {VALIDATION_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
+                          {modelCatalog.models.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
                         </select>
                         <select className="validation-select" value={validationOptionValue('account', account.id, 'reasoning_effort')} onChange={(event) => updateValidationOption('account', account.id, 'reasoning_effort', event.target.value)} aria-label={`账号 ${account.id} 思考复杂度`}>
-                          {REASONING_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                          {reasoningEffortsFor('account', account.id).map((effort) => <option key={effort} value={effort}>{effort}</option>)}
                         </select>
                         <button type="button" className="mini" onClick={() => runValidation('account', account.id)} disabled={validationResults[`account:${account.id}`]?.loading}><MessageCircle size={13} />验证</button>
                         <button type="button" className="mini" onClick={() => setEditingAccount({ ...account })}><Edit3 size={13} />编辑</button>
@@ -480,10 +499,10 @@ function App() {
                       aria-label={`API Key ${item.id} 验证输入`}
                     />
                     <select className="validation-select" value={validationOptionValue('api_key', item.id, 'model')} onChange={(event) => updateValidationOption('api_key', item.id, 'model', event.target.value)} aria-label={`API Key ${item.id} 验证模型`}>
-                      {VALIDATION_MODELS.map((model) => <option key={model} value={model}>{model}</option>)}
+                      {modelCatalog.models.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
                     </select>
                     <select className="validation-select" value={validationOptionValue('api_key', item.id, 'reasoning_effort')} onChange={(event) => updateValidationOption('api_key', item.id, 'reasoning_effort', event.target.value)} aria-label={`API Key ${item.id} 思考复杂度`}>
-                      {REASONING_EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                      {reasoningEffortsFor('api_key', item.id).map((effort) => <option key={effort} value={effort}>{effort}</option>)}
                     </select>
                     <button type="button" className="mini" onClick={() => runValidation('api_key', item.id)} disabled={validationResults[`api_key:${item.id}`]?.loading}><MessageCircle size={13} />验证</button>
                     <button type="button" className="mini" onClick={() => updateApiKeyStatus(item.id, 'active')}>启用</button>

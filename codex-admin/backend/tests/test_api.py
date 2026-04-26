@@ -33,6 +33,26 @@ def sample_auth(device_id: str = "dev-1") -> dict:
     }
 
 
+def test_models_endpoint_reads_codex_model_cache(tmp_path, monkeypatch):
+    cache_path = tmp_path / "models_cache.json"
+    cache_path.write_text(
+        '{"models":[{"slug":"gpt-5.5","display_name":"gpt-5.5","supported_reasoning_levels":[{"effort":"low"},{"effort":"xhigh"}],"visibility":"list"},{"slug":"hidden-model","display_name":"hidden","supported_reasoning_levels":[{"effort":"low"}],"visibility":"hide"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_ADMIN_MODELS_CACHE", str(cache_path))
+    client = make_client(tmp_path)
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["models"][0]["id"] == "gpt-5.5"
+    assert body["models"][0]["reasoning_efforts"] == ["low", "xhigh"]
+    assert "hidden-model" not in [item["id"] for item in body["models"]]
+    assert body["default_model"] == "gpt-5.5"
+    assert body["default_reasoning_effort"] == "low"
+
+
 def test_import_auth_json_creates_account_without_exposing_tokens(tmp_path):
     client = make_client(tmp_path)
 
