@@ -28,13 +28,11 @@ SET status = 1,
     key = '$API_KEY',
     models = '$MODELS',
     "group" = '$GROUPS',
-    tag = 'codex',
-    updated_at = extract(epoch from now())::bigint
+    tag = 'codex'
 WHERE id = $CHANNEL_ID;
 
 UPDATE channels
-SET "group" = 'sssvip,boss,codex',
-    updated_at = extract(epoch from now())::bigint
+SET "group" = 'sssvip,boss,codex'
 WHERE id IN ($OLD_CODEX_CHANNELS);
 
 DELETE FROM abilities WHERE channel_id = $CHANNEL_ID;
@@ -52,7 +50,7 @@ ORDER BY id;
 SQL_EOF
 )
 
-printf '%s\n' "$SQL" | sudo -n docker exec -i model-family-postgres psql -U mf_service -d model_family -P pager=off
+printf '%s\n' "$SQL" | sudo -n docker exec -i model-family-postgres psql -v ON_ERROR_STOP=1 -U mf_service -d model_family -P pager=off
 
 cat <<'NEXT'
 
